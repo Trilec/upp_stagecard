@@ -26,8 +26,17 @@ examples/
 └─ UniCodePicker/
 ├─ UniCodePicker.upp
 └─ main.cpp      # example using StageCard
+└─ BasicDemo/
+├─ BasicDemo.upp
+└─ main.cpp      # example using StageCard
 
 ````
+## Examples Snapshot
+#### BasicDemo:
+<img width="717" height="527" alt="image" src="https://github.com/user-attachments/assets/56bdbe14-7f00-4ac7-9790-d8f2ea66855d" />
+
+#### UnicodePicker (...a More usfull app lol):
+<img width="795" height="581" alt="image" src="https://github.com/user-attachments/assets/4a4daa46-c501-4b45-a42d-fce4bb8e007d" />
 
 ---
 
