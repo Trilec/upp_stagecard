@@ -1,0 +1,13 @@
+description "UniCode Picker Demo App for FlowGridLayout\377";
+
+uses
+	CtrlLib,
+	RichEdit,
+	StageCard;
+
+file
+	main.cpp;
+
+mainconfig
+	"" = "";
+

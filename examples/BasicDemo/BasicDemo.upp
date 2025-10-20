@@ -1,0 +1,13 @@
+description "StageCard feature tour: flow, grid, auto-fill, header styling\377";
+
+uses
+	CtrlLib,
+	Painter,
+	StageCard;
+
+file
+	main.cpp;
+
+mainconfig
+	"" = "";
+
