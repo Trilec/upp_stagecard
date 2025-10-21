@@ -510,7 +510,6 @@ public:
 	    Button::LeftDown(p, k);
 	}
 
-
     // ---------- paint ----------
     virtual void Paint(Draw& w) override {
         // Compute current face/border/ink according to state
@@ -955,7 +954,7 @@ SymbolPickerApp::SymbolPickerApp()
     this->Add(headerCard.HSizePos(DPI(8), DPI(8)).TopPos(DPI(8), DPI(56)));
 
     // Header actions
-    copyBtn.SetLabel("Copy");
+    copyBtn.SetLabel("Copy to Clipboard");
     copyBtn.WhenAction = THISBACK(CopyToClipboard);
     Add(copyBtn.RightPos(DPI(120), DPI(110)).TopPos(DPI(16), DPI(28)));
 

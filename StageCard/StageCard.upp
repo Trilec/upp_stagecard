@@ -1,9 +1,10 @@
-description "U++ StageCard: Compact header + flexible content card\377";
+description "U++ StageCard: flexible content card and layout\377";
 
 uses
 	Core,
 	CtrlLib;
 
 file
-	StageCard.h;
+	StageCard.h,
+	StageCard.cpp;
 
