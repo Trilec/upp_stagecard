@@ -16,17 +16,16 @@ public:
     StageCard();
 
 	// ---- setters (inline-style definitions kept compact) ----
-	StageCard& SetTitle(const String& s, Font f = StdFont().Bold().Height(DPI(22)))   { title = s; titleFont = f; Layout(); return *this; }
-    StageCard& SetSubTitle(const String& s, Font f = StdFont().Height(DPI(12)))   { subTitle = s; subTitleFont = f; Layout(); return *this; }
-    StageCard& SetBadge(const String& s, Font f = StdFont().Height(DPI(12)))  { badge = s; badgeFont = f; Layout(); return *this; }
-    StageCard& SetHeaderAlign(HeaderAlign a)      { headerAlign = a; Layout(); return *this; }
-    StageCard& SetTitleUnderlineThickness(int th) { titleLineTh = max(0, th); Layout(); return *this; }
-    StageCard& SetTitleUnderlineColor(Color c)    { titleLineColor = c; Refresh(); return *this; }
+	StageCard& SetTitle(const String& s )        { title = s;  Layout(); return *this; }
+	StageCard& SetTitleFont(Font f = StdFont().Bold().Height(DPI(18)) ) { titleFont = f; Layout(); return *this; }
+    StageCard& SetSubTitle(const String& s)      { subTitle = s;  Layout(); return *this; }
+	StageCard& SetSubTitleFont(Font f = StdFont().Height(DPI(10)) ) { subTitleFont = f; Layout(); return *this; }
+    StageCard& SetBadge(const String& s)         { badge = s; Layout(); return *this; }
+	StageCard& SetBadgeFont(Font f = StdFont().Height(DPI(18)) ) { badgeFont = f; Layout(); return *this; }	
 
-	// separate font setters (clarity over any implicit "size")
-	StageCard& SetTitleFont(Font f) { titleFont = f; Layout(); return *this; }
-	StageCard& SetSubTitleFont(Font f) { subTitleFont = f; Layout(); return *this; }
-	StageCard& SetBadgeFont(Font f) { badgeFont = f; Layout(); return *this; }	
+    StageCard& SetHeaderAlign(HeaderAlign a)     { headerAlign = a; Layout(); return *this; }
+    StageCard& SetTitleUnderlineThickness(int th){ titleLineTh = max(0, th); Layout(); return *this; }
+    StageCard& SetTitleUnderlineColor(Color c)   { titleLineColor = c; Refresh(); return *this; }
 
 	// Frame toggles & colors (card)
 	StageCard& EnableCardFrame(bool on= true)     { cardFrameOn = on; Refresh(); return *this; }
@@ -107,12 +106,12 @@ private:
     String  title, subTitle, badge;
     Font    titleFont   = StdFont().Bold().Height(DPI(18));
     Font    subTitleFont= StdFont().Height(DPI(10));
-    Font    badgeFont   = StdFont().Height(DPI(10));
+    Font    badgeFont   = StdFont().Height(DPI(18));
     HeaderAlign headerAlign = LEFT;
     Color   titleInk = SColorText();
     Color   subTitleInk = SColorText();
     Color   badgeInk = SColorDisabled();
-    int     titleLineTh = 0;
+    int     titleLineTh = 1;
     int     titleLineX=0, titleLineY=0, titleLineW=0;
     Color   titleLineColor = GrayColor(160);
 
@@ -146,9 +145,9 @@ private:
     bool    autoFill = false;
 
     int     cardPadX = DPI(0), cardPadY = DPI(0);
-    Rect    headerInset  = Rect(DPI(8), DPI(8), DPI(8), DPI(8));
-    int     headerGapV   = DPI(4);
-    Rect    contentInset = Rect(DPI(8), DPI(8), DPI(8), DPI(8));
+    Rect    headerInset  = Rect(DPI(6), DPI(6), DPI(6), DPI(6));
+    int     headerGapV   = DPI(6);
+    Rect    contentInset = Rect(DPI(6), DPI(6), DPI(6), DPI(6));
     Size    contentGap   = Size(DPI(6), DPI(6));
 
     ParentCtrl headerPane;

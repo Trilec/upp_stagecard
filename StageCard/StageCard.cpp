@@ -50,7 +50,7 @@ void StageCard::Layout() {
         else if(headerAlign == CENTER) tx = outer.left + headerInset.left + (header_w_inner - ts.cx)/2;
         titleX = tx; titleY = y;
         y += ts.cy;
-        if(titleLineTh > 0) { y += headerGapV; titleLineX = tx; titleLineY = y; titleLineW = ts.cx; y += titleLineTh; }
+        if(titleLineTh > 0) { y += headerGapV; titleLineX = tx; titleLineY = y; titleLineW = header_w_inner; y += titleLineTh; }
         y += headerGapV;
     } else { titleLineX = titleLineY = titleLineW = 0; }
 
