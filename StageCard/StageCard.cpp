@@ -223,29 +223,63 @@ void StageCard::ContentLayoutPass(int pane_w, int pane_h) {
         const int inner_h = max(0, pane_h - contentInset.top  - contentInset.bottom);
 
         if(autoFill) {
+            // Collect visible children
             Vector<Ctrl*> vis;
             for(Ctrl* q = contentLayer.GetFirstChild(); q; q = q->GetNext())
                 if(q->IsShown()) vis.Add(q);
+
             const int n = vis.GetCount();
             if(n == 0) { virtualH = pane_h; return; }
-            if(n == 1) { vis[0]->SetRect(contentInset.left, contentInset.top, inner_w, inner_h); virtualH = pane_h; return; }
-            const int gaps_h   = (n - 1) * contentGap.cy;
-            const int avail_h  = max(0, inner_h - gaps_h);
-            const int per_h    = n > 0 ? max(0, avail_h / n) : 0;
-            int y = contentInset.top;
+
+            // Measure each child's natural height for the current width
+            Vector<int> nat; nat.SetCount(n, 0);
             for(int i = 0; i < n; ++i) {
-                int h = (i == n - 1) ? (contentInset.top + inner_h - y) : per_h;
-                h = max(0, h);
-                vis[i]->SetRect(contentInset.left, y, inner_w, h);
-                y += h;
-                if(i + 1 < n) y += contentGap.cy;
+                Ctrl* c = vis[i];
+                // Width is authoritative; height provisional during measurement
+                c->SetRect(contentInset.left, contentInset.top, inner_w, inner_h);
+                nat[i] = max(0, c->GetMinSize().cy);
             }
-            virtualH = pane_h; return;
+
+            const int gaps_h = (n > 0 ? (n - 1) * contentGap.cy : 0);
+            int natural_total = 0;
+            for(int h : nat) natural_total += h;
+
+            const int needed = contentInset.top + natural_total + gaps_h + contentInset.bottom;
+
+            int y = contentInset.top;
+            if(needed <= pane_h) {
+                // There is slack: distribute extra height uniformly so content “breathes”
+                const int extra = pane_h - needed;
+                const int per   = n > 0 ? extra / n : 0;
+                int remainder   = extra - per * n;
+
+                for(int i = 0; i < n; ++i) {
+                    int h = nat[i] + per + (remainder > 0 ? 1 : 0);
+                    if(remainder > 0) --remainder;
+                    vis[i]->SetRect(contentInset.left, y, inner_w, h);
+                    y += h;
+                    if(i + 1 < n) y += contentGap.cy;
+                }
+                virtualH = pane_h;   // fits: no virtual overflow
+            } else {
+                // Overflow: keep natural heights and grow virtual height -> scrollbar
+                for(int i = 0; i < n; ++i) {
+                    int h = nat[i];
+                    vis[i]->SetRect(contentInset.left, y, inner_w, h);
+                    y += h;
+                    if(i + 1 < n) y += contentGap.cy;
+                }
+                virtualH = max(pane_h, contentInset.top + natural_total + gaps_h + contentInset.bottom);
+            }
+            return;
         }
+
+        // Non-AutoFill path: respect children's rects; compute virtual height from bottoms
         int max_bottom = contentInset.top;
         for(Ctrl *q = contentLayer.GetFirstChild(); q; q = q->GetNext())
             if(q->IsShown()) max_bottom = max(max_bottom, q->GetRect().bottom);
-        virtualH = max(pane_h, max_bottom + contentInset.bottom); return;
+        virtualH = max(pane_h, max_bottom + contentInset.bottom);
+        return;
     }
 
     if(contentLayout == WRAP) {
@@ -262,7 +296,8 @@ void StageCard::ContentLayoutPass(int pane_w, int pane_h) {
             line_h = max(line_h, s.cy);
         }
         int content_h = y + (line_h > 0 ? line_h : 0) + contentInset.bottom;
-        virtualH = max(pane_h, content_h); return;
+        virtualH = max(pane_h, content_h);
+        return;
     }
 
     if(contentLayout == GRID) {
