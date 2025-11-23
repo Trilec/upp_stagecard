@@ -7,297 +7,552 @@
 namespace Upp {
 
 /*
-===============================================================================
-StageCard
+================================================================================
+StageCard — "card" chrome + simple content layout helper
+================================================================================
+
+Concept
+-------
+
+StageCard is a composite control that gives you:
+
+  1. A HEADER BAND:
+     - Title, subtitle
+     - Optional badge (icon or text)
+     - Underline (horizontal or vertical)
+     - Optional header background and frame
+     - Optional header children (buttons, toggles, etc.)
+
+  2. A CONTENT PANE:
+     - Card-like background + optional frame
+     - Simple layout engine for child controls
+     - Optional scrolling (auto-enabled when content overflows)
+     - Optional horizontal wrapping for "chip"-like layouts
+
+The goal is:
+  - Make it easy to build "card sections" inside dashboards, forms, inspectors.
+  - Avoid re-implementing header chrome and basic layout over and over.
+
 -------------------------------------------------------------------------------
-A self-contained “card” control with:
+Layout Model (high level)
+-------------------------------------------------------------------------------
 
-  • A HEADER area (title, subtitle, optional badge + optional header controls)
-  • A CONTENT area (your app's controls) with an integrated vertical scrollbar
+You primarily control layout with **SetStack(StackMode)**:
 
-Goals
------
-- Drop-in container that looks like a modern card and “just scrolls” when the
-  content is taller than the available area.
-- Make common layouts trivial (absolute/owner-managed, flow/WRAP, simple GRID).
-- Provide clear separation of *decor* (card/header/content frames) and *data*
-  (your controls placed in the content layer).
+  enum class StackMode { NONE, STACKV, STACKH };
 
-Common Usage
-------------
+  • NONE   -> "manual mode":
+      - StageCard does NOT position children; you do it directly on Content().
+      - StageCard only provides scrolling + clipping.
+      - Use this when you already have a dedicated layout (GridLayout, etc.).
+
+  • STACKV -> vertical stack:
+      - Children are arranged top-to-bottom.
+      - You add children with AddFixed(...) or AddExpand(...).
+      - Scrollbar is vertical if needed.
+
+  • STACKH -> horizontal stack:
+      - Children are arranged left-to-right.
+      - Scrollbar is horizontal if needed.
+      - If you also call SetWrap(true), the layout becomes a wrapping "flow"
+        (chips, tiles, etc.) with vertical scroll.
+
+Supporting calls:
+
+  - StackV()       -> SetStack(StackMode::STACKV)
+  - StackH()       -> SetStack(StackMode::STACKH)
+  - ContentManual()-> SetStack(StackMode::NONE)
+  - SetWrap(true)  -> Enable wrapping when in STACKH mode.
+
+-------------------------------------------------------------------------------
+Stack children: AddFixed / AddExpand / AddSpacer
+-------------------------------------------------------------------------------
+
+Stack mode uses a one-dimensional "main axis" (vertical or horizontal):
+
+  • In STACKV:
+      - main axis = vertical (height)
+      - cross axis = horizontal (width)
+
+  • In STACKH:
+      - main axis = horizontal (width)
+      - cross axis = vertical (height)
+
+You add content with:
+
+  StageCard& AddFixed (Ctrl& c, int px, int py);
+  StageCard& AddFixed (Ctrl& c, int px);
+  StageCard& AddFixed (Ctrl& c);
+  StageCard& AddExpand(Ctrl& c, int weight = 1);
+  StageCard& AddSpacer(int weight = 1);
+
+Semantics:
+
+  • AddFixed(c, px, py)
+      - In WRAP mode (STACKH + wrap):
+          - px, py are the *tile size* (width/height) for that control.
+          - If px <= 0 or py <= 0, StageCard uses c.GetMinSize().
+          - Tiles are placed left-to-right, wrapping into new rows.
+      - In non-wrap stack:
+          - px is the *main-axis* fixed size (height in STACKV, width in STACKH).
+          - cross-axis is always stretched to fill the available size.
+          - If px <= 0, StageCard uses c.GetMinSize().cy or .cx on the main axis.
+
+  • AddFixed(c, px)
+      - Convenience: single fixed size for the main axis.
+      - In WRAP mode, treated as a square tile (px x px).
+
+  • AddFixed(c)
+      - Uses c.GetMinSize() on the main axis (and both axes when wrapping).
+
+  • AddExpand(c, weight)
+      - Control participates in distributing *extra* main-axis space.
+      - Its natural size comes from GetMinSize() (or px if you later use a fixed_px).
+      - The "weight" is relative — e.g. weight 2 gets twice as much extra as weight 1.
+      - This is how you make "buttons share height equally" in a vertical stack, etc.
+
+  • AddSpacer(weight)
+      - Like AddExpand but with no control — just flexible gap.
+
+Important:
+  - There is NO AddFit API anymore.
+  - If you want a control to "fill width", just:
+        • Use STACKV and AddFixed(...); StageCard always stretches cross-axis.
+        • Or use AddExpand to let it also flex in the main axis.
+
+-------------------------------------------------------------------------------
+Manual mode
+-------------------------------------------------------------------------------
+
+If you call ContentManual() or SetStack(StackMode::NONE):
+
+  • StageCard does NOT reposition children in Content().
+  • You are responsible for doing SetRect() on your controls.
+  • StageCard:
+      - Clips content to a viewport.
+      - Tracks the union of child rectangles.
+      - Shows a scrollbar if content is larger than the viewport.
+  • Scroll axis (vertical vs horizontal) follows an internal "direction"
+    (vertical by default). For most manual use-cases you just let it be.
+
+You can always access the scrolled layer via:
+  ParentCtrl& Content()  -> add your own layout, or controls with explicit SetRect.
+
+-------------------------------------------------------------------------------
+Scrolling & insets
+-------------------------------------------------------------------------------
+
+  - EnableContentScroll(true)  -> allow scrollbars when content overflows.
+  - EnableContentClampToPane(true) -> clamp the content viewport to the card.
+  - SetContentInset(...)       -> margin around the content frame.
+  - SetContentInnerInset(...)  -> extra inset inside the content pane applied
+                                  when laying out the children.
+
+-------------------------------------------------------------------------------
+Typical usage patterns
+-------------------------------------------------------------------------------
+
+1) Vertical card with stacked rows:
+
     StageCard card;
-    card.SetTitle("Orders").SetSubTitle("Last 30 days")
-        .EnableCardFrame()
+    card.SetTitle("Settings")
+        .StackV()
         .EnableContentScroll(true)
-        .ContentWrap().WrapItemSize(DPI(160), DPI(80));
+        .SetContentInset(DPI(8), DPI(8), DPI(8), DPI(8))
+        .SetContentGap(DPI(4), DPI(4));
 
-    FlowBoxLayout& grid = ...; // e.g. your layout control
-    card.AddContent(grid);
+    Button b1, b2;
+    b1.SetLabel("Apply");
+    b2.SetLabel("Cancel");
 
-Key Concepts
-------------
-- headerPane    : a child ParentCtrl that can host *your* header widgets (filters, etc.)
-- contentLayer  : where you add your actual content controls
-- contentPane   : clips content; card manages a vertical ScrollBar against this pane
-- autoFill (FIXED mode):
-      * false -> you position children yourself; card only computes virtual height
-      * true  -> card splits available height between visible children (evenly),
-                 still enabling scrolling when natural height > pane height
-===============================================================================
+    card.AddFixed(b1);                // uses b1.GetMinSize().cy as row height
+    card.AddFixed(b2, DPI(40));       // force height 40px
+
+2) "Chips" / tiles layout with wrapping:
+
+    StageCard chips;
+    chips.SetTitle("Tags")
+         .SetStackH()
+         .SetWrap(true)
+         .EnableContentScroll(true)
+         .SetContentGap(DPI(6), DPI(6));
+
+    for (...) {
+        ChipCtrl& c = ...;
+        c.SetMinSize(Size(DPI(80), DPI(32)));
+        chips.AddFixed(c);    // tile size taken from GetMinSize()
+    }
+
+3) Manual content with a custom layout:
+
+    StageCard view;
+    view.SetTitle("Preview")
+        .SetStackNode() //Manual placement
+        .EnableContentScroll(true);
+
+    ParentCtrl& pane = view.Content();
+    pane.Add(graphView.SizePos());    // you manage layout yourself
+
+-------------------------------------------------------------------------------
+Public API below: mostly styling + the stack helpers described above.
+-------------------------------------------------------------------------------
 */
 
 class StageCard : public ParentCtrl {
 public:
     typedef StageCard CLASSNAME;
 
-    // Title/badge alignment choices inside the header text block.
-    enum HeaderAlign   { LEFT, RIGHT, CENTER };
+    enum HeaderAlign { LEFT, RIGHT, CENTER };
 
-    // Built-in content layout modes (pick one):
-    //   FIXED : absolute/owner-managed layout; optional autoFill to distribute height
-    //   WRAP  : simple horizontal flow with wrapping (uses WrapItemSize as base tile)
-    //   GRID  : columnar grid; fixed or stretchable cells
-    enum ContentLayout { FIXED, WRAP, GRID };
+    // Public-facing stacking mode
+    enum class StackMode { NONE, STACKV, STACKH };
 
+    // Helpers to derive per-state colors from a base
+    static inline void MakeFaceStates(Color base, Color (&dst)[4],
+                                      int hot_pct=12, int press_pct=14, int dis_mix=60) {
+        dst[0] = base;
+        dst[1] = Blend(base, White(), hot_pct);
+        dst[2] = Blend(base, Black(), press_pct);
+        dst[3] = Blend(SColorFace(), SColorPaper(), dis_mix);
+    }
+    static inline void MakeBorderStates(Color base, Color (&dst)[4],
+                                        int hot_hi=20, int press_bl=15, int dis_mix=35) {
+        dst[0] = base;
+        dst[1] = Blend(base, SColorHighlight(), hot_hi);
+        dst[2] = Blend(base, Black(), press_bl);
+        dst[3] = Blend(base, SColorDisabled(), dis_mix);
+    }
+
+    // ------- Styling types -------
+    struct UiPalette {
+        // Card (stateless)
+        Color cardBorder = SColorShadow();
+        Color cardFill   = Color(240,240,240);
+
+        // Header (stateful)
+        Color headerFace[4];     // N/H/P/D
+        Color headerBorder[4];   // N/H/P/D
+        Color titleInk[4];       // N/H/P/D
+        Color subTitleInk[4];    // N/H/P/D
+        Color badgeInk[4];       // N/H/P/D
+
+        // Content (stateless)
+        Color contentBg  = SColorPaper();
+        Color contentInk = SColorText();
+
+        // Misc
+        Color underline  = GrayColor(160);
+    };
+
+    struct UiMetrics {
+        Font  titleFont        = StdFont().Bold().Height(DPI(18));
+        Font  subTitleFont     = StdFont().Height(DPI(9));
+        Font  badgeFont        = StdFont().Height(DPI(18));
+        int   padX             = DPI(4); // internal pad used by header text block
+        int   padY             = DPI(4);
+        int   headerGap        = DPI(4); // single line-spacing inside header
+        int   titleUnderlineTh = 1;
+        HeaderAlign badgeAlignDefault = RIGHT;
+    };
+
+    struct GlyphLook {
+        Image  img;
+        String text;
+        Font   font;
+        Color  ink = SColorText();
+        bool IsEmpty() const { return img.IsEmpty() && text.IsEmpty(); }
+    };
+
+    struct Style {
+        UiPalette palette;
+        UiMetrics metrics;
+        GlyphLook badgeGlyph; // default badge if not set on control
+
+        // Optional painters (called when corresponding layer is enabled)
+        Callback2<const StageCard&, Draw&> paintCardBg;
+        Callback2<const StageCard&, Draw&> paintHeaderBg;
+        Callback2<const StageCard&, Draw&> paintContentBg;
+        Callback2<const StageCard&, Draw&> paintHeaderFrame;
+        Callback2<const StageCard&, Draw&> paintContentFrame;
+        Callback2<const StageCard&, Draw&> paintCardFrame;
+        Callback2<const StageCard&, Draw&> paintTitles; // replaces default title/subtitle/underline
+    };
+
+    // ------- API: style -------
+    StageCard& SetStyle(const Style& s);      // references external style (not owned)
+    StageCard& SetStyleOwned(const Style& s); // stores a copy (owned)
+    StageCard& SetPalette(const UiPalette& p);
+    StageCard& SetMetrics(const UiMetrics& m);
+    static const Style& StyleDefault();
+
+    // Header dynamic state on/off
+    StageCard& EnableHeaderState(bool on = true) { headerStateOn_ = on; Refresh(); return *this; }
+
+    // ------- Lifecycle -------
     StageCard();
 
-    //----------------------------------------------------------------------------
-    // Header text/badge (all trigger a Layout so geometry updates immediately)
-    //----------------------------------------------------------------------------
-    StageCard& SetTitle(const String& s)                         { title = s;  Layout(); return *this; }
-    StageCard& SetTitleFont(Font f = StdFont().Bold().Height(DPI(18)))
-                                                                  { titleFont = f; Layout(); return *this; }
-    StageCard& SetSubTitle(const String& s)                      { subTitle = s;  Layout(); return *this; }
-    StageCard& SetSubTitleFont(Font f = StdFont().Height(DPI(10)))
-                                                                  { subTitleFont = f; Layout(); return *this; }
-    StageCard& SetBadge(const String& s)                         { badge = s; Layout(); return *this; }
-    StageCard& SetBadgeFont(Font f = StdFont().Height(DPI(18)))  { badgeFont = f; Layout(); return *this; }
+    // ---- Header text ----
+    StageCard& SetTitle(const String& s)            { title = s; Layout(); return *this; }
+    StageCard& SetTitleFont(Font f)                 { metrics_.titleFont = f; Layout(); return *this; }
+    StageCard& SetSubTitle(const String& s)         { subTitle = s; Layout(); return *this; }
+    StageCard& SetSubTitleFont(Font f)              { metrics_.subTitleFont = f; Layout(); return *this; }
 
-    // Where to align the header title block (also affects subtitle; badge mirrors).
-    StageCard& SetHeaderAlign(HeaderAlign a)                     { headerAlign = a; Layout(); return *this; }
+    // ---- Badge (icon or centered text) ----
+    StageCard& SetBadge(const String& s)            { badge = s; hasBadgeText = !IsNull(s); Layout(); return *this; }
+    StageCard& SetBadgeFont(Font f)                 { metrics_.badgeFont = f; Layout(); return *this; }
+    StageCard& SetBadgeIcon(const Image& img, Size pref = Size(0,0))
+                                                    { badgeIcon = img; badgeIconPref = pref; hasBadgeIcon = !img.IsEmpty(); Layout(); return *this; }
+    StageCard& SetBadgeAlignment(HeaderAlign a)     { badgeAlign = a; badgeAlignExplicit = true; Layout(); return *this; }
 
-    // Optional title underline: thickness=0 disables. Color is independent.
-    StageCard& SetTitleUnderlineThickness(int th)                { titleLineTh = max(0, th); Layout(); return *this; }
-    StageCard& SetTitleUnderlineColor(Color c)                   { titleLineColor = c; Refresh(); return *this; }
+    // Title/subtitle horizontal alignment (does not move centered icon)
+    StageCard& SetHeaderAlign(HeaderAlign a)        { headerAlign = a; Layout(); return *this; }
 
-    //----------------------------------------------------------------------------
-    // Card (outer) frame styling
-    //----------------------------------------------------------------------------
-    // Enable/disable the outer card stroke/fill. Use this to blend into a parent.
-    StageCard& EnableCardFrame(bool on = true)                   { cardFrameOn = on; Refresh(); return *this; }
-    StageCard& EnableCardFill(bool on = true)                    { cardFillOn  = on; Refresh(); return *this; }
+    // Underline
+    StageCard& SetTitleUnderlineThickness(int th)   { metrics_.titleUnderlineTh = max(0, th); Layout(); return *this; }
+    StageCard& SetTitleUnderlineColor(Color c)      { palette_.underline = c; Refresh(); return *this; }
+    StageCard& SetTitleUnderlineVertical(bool on = true) { underlineVertical = on; Layout(); return *this; }
 
-    // Corner radius & stroke for the outer card.
-    StageCard& SetCardCornerRadius(int px)                       { cardRadius  = max(DPI(0), px); Refresh(); return *this; }
-    StageCard& SetCardStrokeThickness(int px)                    { cardStrokeTh= max(0, px);     Refresh(); return *this; }
-    StageCard& SetCardDashPattern(const String& d)               { cardDash    = d; Refresh(); return *this; }
-    StageCard& EnableCardDashed(bool on = true)                  { cardDashed  = on; Refresh(); return *this; }
+    // ---- Header colors (palette wiring) ----
+    StageCard& SetHeaderColor(Color face_base, Color border_base);
+    StageCard& SetHeaderColorState(Color fN, Color fH, Color fP, Color fD,
+                                   Color bN, Color bH, Color bP, Color bD);
 
-    // Unified color setter for the outer card and header text inks.
-    StageCard& SetCardColors(Color fill = Color(240,240,240),
-                             Color stroke = Color(200,200,200),
-                             Color tInk = SColorText(),
-                             Color stInk = SColorText(),
-                             Color badgeInkC = SColorDisabled())
-    { cardFill = fill; cardStroke = stroke; titleInk=tInk; subTitleInk=stInk; badgeInk=badgeInkC; Refresh(); return *this; }
+    // ---- Title / Subtitle / Badge inks ----
+    StageCard& SetTitleColor(Color base, Color disabled = SColorDisabled());
+    StageCard& SetSubTitleColor(Color base, Color disabled = SColorDisabled());
+    StageCard& SetBadgeColor(Color base, Color disabled = SColorDisabled());
 
-    //----------------------------------------------------------------------------
-    // Header frame styling (rectangle behind header text/controls)
-    //----------------------------------------------------------------------------
-    StageCard& EnableHeaderFrame(bool on = true)                 { headerFrameOn = on; Refresh(); return *this; }
-    StageCard& EnableHeaderFill(bool on = true)                  { headerFillOn  = on; Refresh(); return *this; }
-    StageCard& SetHeaderCornerRadius(int px)                     { headerRadius  = max(DPI(0), px); Refresh(); return *this; }
-    StageCard& SetHeaderStrokeThickness(int px)                  { headerStrokeTh= max(0, px);     Refresh(); return *this; }
-    StageCard& SetHeaderDashPattern(const String& d)             { headerDash    = d; Refresh(); return *this; }
-    StageCard& EnableHeaderDashed(bool on = false)               { headerDashed  = on; Refresh(); return *this; }
-    StageCard& SetHeaderFrameColors(Color fill, Color stroke)    { headerFill = fill; headerStroke = stroke; Refresh(); return *this; }
+    StageCard& SetTitleColorState(Color n, Color h, Color p, Color d);
+    StageCard& SetSubTitleColorState(Color n, Color h, Color p, Color d);
+    StageCard& SetBadgeColorState(Color n, Color h, Color p, Color d);
 
-    //----------------------------------------------------------------------------
-    // Content frame styling (rectangle behind content area)
-    //----------------------------------------------------------------------------
-    StageCard& EnableContentFrame(bool on = false)               { contentFrameOn = on; Refresh(); return *this; }
-    StageCard& EnableContentFill(bool on = true)                 { contentFillOn  = on; Refresh(); return *this; }
-    StageCard& SetContentCornerRadius(int px)                    { contentRadius  = max(DPI(0), px); Refresh(); return *this; }
-    StageCard& SetContentStrokeThickness(int px)                 { contentStrokeTh= max(0, px);     Refresh(); return *this; }
-    StageCard& SetContentDashPattern(const String& d)            { contentDash    = d; Refresh(); return *this; }
-    StageCard& EnableContentDashed(bool on = false)              { contentDashed  = on; Refresh(); return *this; }
-    StageCard& SetContentFrameColors(Color fill, Color stroke)   { contentFill = fill; contentStroke = stroke; Refresh(); return *this; }
+    // ---- Content/Card colors (stateless) ----
+    StageCard& SetContentColor(Color bg, Color ink = SColorText());
+    StageCard& SetCardColors(Color fill = Color(240,240,240), Color stroke = Color(200,200,200));
 
-    //----------------------------------------------------------------------------
-    // Insets & gaps
-    //----------------------------------------------------------------------------
-    // Convenience: set the same inset on header+content at once.
-    StageCard& SetInset(int all)                                  { SetHeaderInset(all,all,all,all); SetContentInset(all,all,all,all); return *this; }
-    // Convenience: set per-edge inset on both header and content.
-    StageCard& SetInset(int l, int t, int r, int b)               { SetHeaderInset(l,t,r,b); SetContentInset(l,t,r,b); return *this; }
+    // ---- Frames & toggles ----
+    StageCard& EnableCardFrame(bool on = true)           { cardFrameOn = on; Refresh(); return *this; }
+    StageCard& EnableCardFill(bool on = true)            { cardFillOn  = on; Refresh(); return *this; }
+    StageCard& SetCardCornerRadius(int px)               { cardRadius  = max(DPI(0), px); Refresh(); return *this; }
+    StageCard& SetCardFrameThickness(int px)             { cardStrokeTh= max(0, px);     Refresh(); return *this; }
+    StageCard& SetCardDashPattern(const String& d)       { cardDash    = d; Refresh(); return *this; }
+    StageCard& EnableCardDash(bool on = false)           { cardDashed  = on; Refresh(); return *this; }
 
-    // Header block padding and vertical gap between text lines/underline.
-    StageCard& SetHeaderInset(int l, int t, int r, int b)         { headerInset = Rect(max(0,l), max(0,t), max(0,r), max(0,b)); Layout(); return *this; }
-    StageCard& SetHeaderGap(int v)                                { headerGapV = max(0, v); Layout(); return *this; }
+    StageCard& EnableHeaderFrame(bool on = false)        { headerFrameOn = on; Refresh(); return *this; }
+    StageCard& EnableHeaderFill(bool on = true)          { headerFillOn  = on; Refresh(); return *this; }
+    StageCard& SetHeaderCornerRadius(int px)             { headerRadius  = max(DPI(0), px); Refresh(); return *this; }
+    StageCard& SetHeaderFrameThickness(int px)           { headerStrokeTh= max(0, px);     Refresh(); return *this; }
+    StageCard& SetHeaderDashPattern(const String& d)     { headerDash    = d; Refresh(); return *this; }
+    StageCard& EnableHeaderDash(bool on = false)         { headerDashed  = on; Refresh(); return *this; }
 
-    // Content block padding and inter-control gap (used by WRAP/GRID and by
-    // FIXED+autoFill when distributing height across visible children).
-    StageCard& SetContentInset(int l, int t, int r, int b)        { contentInset = Rect(max(0,l), max(0,t), max(0,r), max(0,b)); Layout(); return *this; }
-    StageCard& SetContentGap(int gx, int gy)                      { contentGap = Size(max(0,gx), max(0,gy)); Layout(); return *this; }
+    StageCard& EnableContentFrame(bool on = false)       { contentFrameOn = on; Refresh(); return *this; }
+    StageCard& EnableContentFill(bool on = true)         { contentFillOn  = on; Refresh(); return *this; }
+    StageCard& SetContentCornerRadius(int px)            { contentRadius  = max(DPI(0), px); Refresh(); return *this; }
+    StageCard& SetContentFrameThickness(int px)          { contentStrokeTh= max(0, px);     Refresh(); return *this; }
+    StageCard& SetContentDashPattern(const String& d)    { contentDash    = d; Refresh(); return *this; }
+    StageCard& EnableContentDash(bool on = false)        { contentDashed  = on; Refresh(); return *this; }
 
-    // Convenience: sets both headerGapV and content gap uniformly.
-    StageCard& SetGap(int g)                                      { headerGapV = max(0,g); contentGap = Size(max(0,g), max(0,g)); Layout(); return *this; }
+    // ---- Insets & gaps (Qt-like) ----
+    StageCard& SetHeaderInset(int l, int t, int r, int b);
+    StageCard& SetHeaderGap(int px);
+    StageCard& SetCardGap(int px);
 
-    //----------------------------------------------------------------------------
-    // Child management
-    //----------------------------------------------------------------------------
-    // Add/clear your own controls inside the header (e.g., buttons, filters).
-    StageCard& AddHeader(Ctrl& c)                                 { headerPane.Add(c); Layout(); return *this; }
-    StageCard& ClearHeader()                                      { ClearChildren(headerPane); Layout(); return *this; }
+    // Content insets & gaps
+    StageCard& SetContentInset(int l, int t, int r, int b);
+    StageCard& SetContentInnerInset(int l, int t, int r, int b);
+    StageCard& SetContentGap(int gx, int gy);
 
-    // Add/clear/replace content controls. Add to *contentLayer* (not contentPane).
-    StageCard& AddContent(Ctrl& c)                                { contentLayer.Add(c); contentDirty = true; Layout(); return *this; }
-    StageCard& ClearContent()                                     { ClearChildren(contentLayer); contentDirty = true; Layout(); return *this; }
-    StageCard& ReplaceContent(Ctrl& c)                            { ClearChildren(contentLayer); contentLayer.Add(c); contentDirty = true; Layout(); return *this; }
+    // ---- Content behavior / sizing ----
+    StageCard& EnableContentScroll(bool on = true)        { scrollEnabled = on; Layout(); return *this; }
+    StageCard& EnableContentClampToPane(bool on = true)   { clampContentToPane = on; Layout(); return *this; }
+    StageCard& SetMinContent(Size s)                      { minContent = s; Layout(); return *this; }
+    StageCard& SetMaxContent(Size s)                      { maxContent = s; Layout(); return *this; }
 
-    //----------------------------------------------------------------------------
-    // Behavior toggles that influence scrolling and sizing
-    //----------------------------------------------------------------------------
-    // FIXED mode helper: when true, the card evenly distributes available height
-    // across visible children; if children need more, the scrollbar appears.
-    StageCard& EnableContentAutoFill(bool on = true)              { autoFill = on; Layout(); return *this; }
+    // ---- Content / layout modes ----
 
-    // Turn the built-in vertical scrollbar on/off.
-    StageCard& EnableContentScroll(bool on = true)                { scrollEnabled = on; Layout(); return *this; }
+    // High-level API: main way to choose layout.
+    StageCard& SetStack(StackMode m);
 
-    // If true, the content pane’s height is clamped to the visible area (usual).
-    // If false, min/max content sizes below can grow/shrink the pane before
-    // scrolling is considered (useful for “tall” details cards).
-    StageCard& EnableContentClampToPane(bool on = true)           { clampContentToPane = on; Layout(); return *this; }
+    // Convenience helpers
+    StageCard& SetStackV()    { return SetStack(StackMode::STACKV); }
+    StageCard& SetStackH()    { return SetStack(StackMode::STACKH); }
+    StageCard& SetStackNone() { return SetStack(StackMode::NONE);  }
 
-    // Optional vertical size constraints for the content pane (effective when
-    // clamp is disabled). Leave at (0,0) to ignore.
-    StageCard& SetMinContent(Size s)                              { minContent = s; Layout(); return *this; }
-    StageCard& SetMaxContent(Size s)                              { maxContent = s; Layout(); return *this; }
+    // Wrapping only affects horizontal stack mode (STACKH).
+    StageCard& SetWrap(bool on = true)                    { wrap = on; Layout(); return *this; }
 
-    //----------------------------------------------------------------------------
-    // Content layout modes (pick one)
-    //----------------------------------------------------------------------------
-    StageCard& ContentAbsolute()                                   { contentLayout = FIXED; Layout(); return *this; } // owner manages child rects (or use autoFill)
-    StageCard& ContentWrap()                                       { contentLayout = WRAP;  Layout(); return *this; } // simple horizontal flow with wrapping
-    StageCard& ContentGrid()                                       { contentLayout = GRID;  Layout(); return *this; } // columnar grid
+    // ---- Stack API (Fixed / Expand / Spacer) ----
+    StageCard& ReplaceExpand(Ctrl& c, int w = 1);
+    StageCard& ReplaceFixed (Ctrl& c, int px, int py);
+    StageCard& ReplaceFixed (Ctrl& c);
 
-    // WRAP mode base item size (tile width/height). If not set, child min-size is used.
-    StageCard& WrapItemSize(int w, int h)                          { wrapItemW=w; wrapItemH=h; Layout(); return *this; }
-    StageCard& WrapItemSize(Size s)                                { wrapItemW=s.cx; wrapItemH=s.cy; Layout(); return *this; }
+    StageCard& ClearContent();
 
-    // GRID mode knobs.
-    StageCard& GridCols(int n)                                     { gridCols = max(1, n); Layout(); return *this; }
-    StageCard& GridCell(int w, int h)                              { gridCellW=w; gridCellH=h; Layout(); return *this; }
-    // Stretch: child rect == cell rect; otherwise child is centered within the cell.
-    StageCard& GridStretch(bool on = false)                        { gridStretch=on; Layout(); return *this; }
-    // Fill: compute cell size from pane to fill all columns/rows; otherwise use fixed cell size.
-    StageCard& GridFill(bool on = true)                            { gridFill = on; Layout(); return *this; }
+    // px/py: fixed cell size; <=0 means "use control's natural size"
+    StageCard& AddFixed (Ctrl& c, int px, int py);
+    StageCard& AddFixed (Ctrl& c, int px);   // main-axis size
+    StageCard& AddFixed (Ctrl& c);           // natural main-axis size
+    StageCard& AddExpand(Ctrl& c, int w=1);  // participates in extra space distribution
+    StageCard& AddSpacer(int weight=1);
 
-    //----------------------------------------------------------------------------
-    // Size & layout hooks
-    //----------------------------------------------------------------------------
-    Size GetMinSize() const override;      // conservative height; ensures header is visible
-    void Layout() override;                // header metrics, content/scroll negotiation
-    void Paint(Draw& w) override;          // three layers: card, header, content
+    // Header children
+    StageCard& AddHeader(Ctrl& c) { headerPane.Add(c); Layout(); return *this; }
+    StageCard& ClearHeader();
 
-    // Mouse wheel is forwarded to the integrated scrollbar (when shown).
+    // ---- Hooks ----
+    ParentCtrl& Header()  { return headerPane; }   // header band
+    ParentCtrl& Content() { return contentLayer; } // scrolled layer (use this)
+
+    Size GetMinSize() const override;
+    void Layout() override;
+    void Paint(Draw& w) override;
     void MouseWheel(Point p, int zdelta, dword keyflags) override;
 
-private:
-    // --- Public state (text/inks/metrics) ------------------------------------
-    String  title, subTitle, badge;
-    Font    titleFont   = StdFont().Bold().Height(DPI(18));
-    Font    subTitleFont= StdFont().Height(DPI(10));
-    Font    badgeFont   = StdFont().Height(DPI(18));
-    HeaderAlign headerAlign = LEFT;
-    Color   titleInk = SColorText();
-    Color   subTitleInk = SColorText();
-    Color   badgeInk = SColorDisabled();
-    int     titleLineTh = 1;                 // 0 => no underline
-    int     titleLineX=0, titleLineY=0, titleLineW=0;
-    Color   titleLineColor = GrayColor(160);
+    bool IsVerticalScroll() const { return (dir == Direction::V) || (mode == ContentMode::STACK && wrap); }
+    bool IsWrap() const           { return mode == ContentMode::STACK && wrap && dir == Direction::H; }
 
-    // --- Card frame styling ---------------------------------------------------
+private:
+    // ---- Internal layout enums ----
+    enum class Direction   { V, H };
+    enum class ContentMode { STACK, MANUAL };
+
+    // ---- Internal state index ----
+    enum { ST_NORMAL = 0, ST_HOT = 1, ST_PRESSED = 2, ST_DISABLED = 3, ST_COUNT = 4 };
+
+    // Header mouse sensor
+    struct HeaderHitCtrl : ParentCtrl {
+        HeaderHitCtrl(StageCard& o) : owner(o) { Transparent(); }
+        void MouseMove(Point p, dword k) override     { owner.OnHeaderMouseMove(p, k); }
+        void MouseEnter(Point p, dword k) override    { owner.OnHeaderMouseEnter(p, k); }
+        void MouseLeave() override                    { owner.OnHeaderMouseLeave(); }
+        void LeftDown(Point p, dword k) override      { owner.OnHeaderLeftDown(p, k); }
+        void LeftUp(Point p, dword k) override        { owner.OnHeaderLeftUp(p, k); }
+        void MouseWheel(Point p, int z, dword k) override { owner.MouseWheel(p, z, k); }
+        StageCard& owner;
+    };
+
+    int  HeaderStateIndex() const;
+    void OnHeaderMouseEnter(Point, dword);
+    void OnHeaderMouseMove(Point, dword);
+    void OnHeaderMouseLeave();
+    void OnHeaderLeftDown(Point, dword);
+    void OnHeaderLeftUp(Point, dword);
+
+    // ---- Style state ----
+    UiPalette   palette_;
+    UiMetrics   metrics_;
+    One<Style>  owned_style_;
+    const Style* style_ref_ = nullptr;
+
+    // header interaction
+    bool headerStateOn_ = true;
+    bool headerHot_     = false;
+    bool headerDown_    = false;
+
+    Rect  lastVBarRc;
+
+    // text
+    String  title, subTitle, badge;
+
+    // computed header geometry
+    int  titleX = 0, titleY = 0, titleW = 0;
+    int  subTitleX = 0, subTitleY = 0, subTitleW = 0;
+    int  titleLineY = 0;
+    int  line1X = 0, line1W = 0;
+    int  line2X = 0, line2W = 0;
+    int  vLineX = 0, vLineY = 0, vLineH = 0;   // vertical underline geometry
+    bool underlineVertical = false;            // false = horizontal (default), true = vertical
+
+    // badge (icon+text overlay)
+    Image   badgeIcon;
+    Size    badgeIconPref = Size(0,0);
+    bool    hasBadgeIcon  = false;
+    bool    hasBadgeText  = false;
+    HeaderAlign badgeAlign = RIGHT;
+    bool    badgeAlignExplicit = false;
+    Rect    badgeIconRc;
+
+    // frames/toggles
     bool    cardFrameOn  = true;
     bool    cardFillOn   = true;
     int     cardRadius   = DPI(6);
     int     cardStrokeTh = 1;
     bool    cardDashed   = false;
     String  cardDash     = "5,5";
-    Color   cardFill     = Color(240,240,240);
-    Color   cardStroke   = SColorShadow();
 
-    // --- Header frame styling -------------------------------------------------
     bool    headerFrameOn  = false;
-    bool    headerFillOn   = false;
+    bool    headerFillOn   = true;
     int     headerRadius   = DPI(0);
     int     headerStrokeTh = 1;
     bool    headerDashed   = false;
     String  headerDash     = "5,5";
-    Color   headerFill     = Color(255,255,255);
-    Color   headerStroke   = GrayColor(160);
 
-    // --- Content frame styling ------------------------------------------------
     bool    contentFrameOn  = false;
     bool    contentFillOn   = false;
-    int     contentRadius   = DPI(0);
+    int     contentRadius   = 0;
     int     contentStrokeTh = 1;
     bool    contentDashed   = false;
     String  contentDash     = "5,5";
-    Color   contentFill     = Color(255,255,255);
-    Color   contentStroke   = GrayColor(160);
 
-    // --- Behavior toggles -----------------------------------------------------
-    bool    autoFill = false;               // FIXED mode helper
-    int     cardPadX = DPI(0), cardPadY = DPI(0);
-
-    // Insets and gaps
-    Rect    headerInset  = Rect(DPI(6), DPI(6), DPI(6), DPI(6));
-    int     headerGapV   = DPI(6);
-    Rect    contentInset = Rect(DPI(6), DPI(6), DPI(6), DPI(6));
+    // behavior / sizing
+    Rect    headerInset  = Rect(DPI(0), DPI(0), DPI(0), DPI(0)); // padding around header block
+    int     cardGap      = DPI(6);                               // gap between header and content
+    Rect    contentInset = Rect(DPI(0), DPI(0), DPI(0), DPI(0));
+    Rect    contentInnerInset = Rect(DPI(0), DPI(0), DPI(0), DPI(0));
     Size    contentGap   = Size(DPI(6), DPI(6));
+    HeaderAlign headerAlign = LEFT;
+    int     badgeGapX    = DPI(8);
 
-    // --- Internal panes -------------------------------------------------------
-    ParentCtrl headerPane;                  // user header widgets live here
-    ParentCtrl contentPane;                 // viewport that clips content
-    ParentCtrl contentLayer;                // user content lives here (scrolls)
+    // panes & scroll
+    HeaderHitCtrl headerPane { *this };
+    ParentCtrl    contentPane;
+    ParentCtrl    contentLayer;
+    ScrollBar     vbar;
+    bool          scrollEnabled = true;
+    int           scroll_y = 0;
 
-    // --- Scroll state ---------------------------------------------------------
-    ScrollBar  vbar;
-    bool       scrollEnabled = true;
-    int        scroll_y = 0;                // current top offset in contentLayer
+    // modes
+    ContentMode mode = ContentMode::STACK;
+    Direction   dir  = Direction::H;
+    bool        wrap = false;
 
-    // --- Content layout mode + params ----------------------------------------
-    ContentLayout contentLayout = FIXED;
-    int       wrapItemW = 0, wrapItemH = 0; // WRAP base size (fallback to child min)
-    int       gridCols   = 3, gridCellW  = 0, gridCellH  = 0; // GRID params
-    bool      gridStretch= true;
-    bool      gridFill = false;
-
-    // --- Pane size rules ------------------------------------------------------
-    bool      clampContentToPane = true;    // true: pane_h is viewport height
+    // size rules
+    bool      clampContentToPane = true;
     Size      minContent = Size(0,0), maxContent = Size(0,0);
 
-    // --- Cached layout metrics ------------------------------------------------
+    // cached
     int       cachedHeaderMin = DPI(10);
     Rect      lastHeaderRc, lastContentRc;
-    int       titleX=0, titleY=0, titleW=0;
-    int       subTitleX=0, subTitleY=0, subTitleW=0;
-    int       badgeX=0, badgeY=0, badgeW=0;
-
-    int       virtualH = DPI(10);           // total natural height of contentLayer
+    int       virtualLen = DPI(10);
     bool      contentDirty = true;
 
-    // --- helpers --------------------------------------------------------------
-    static void ClearChildren(ParentCtrl& p);              // remove all children
-    Size WrapBaseSize(Ctrl& c) const;                      // WRAP base tile size
-    void ContentLayoutPass(int pane_w, int pane_h);        // computes virtualH & child rects
+    // ---- Stack bookkeeping ----
+    enum class ItemKind { CtrlItem, Spacer };
+    struct Item : Moveable<Item> {
+        ItemKind kind = ItemKind::CtrlItem;
+        Ctrl*    c    = nullptr;
+        int      fixed_px = -1; // main-axis fixed size (non-wrap)
+        int      fixed_w  = -1; // explicit width  (wrap)
+        int      fixed_h  = -1; // explicit height (wrap)
+        int      expand_w = 0;  // >0 == participates in expand distribution
+        Rect     rect;
+    };
+    Vector<Item> items;
 
-    // Painting helpers (card/header/content layers)
-    void PaintCardLayer(BufferPainter& p, const Size& sz) const;
-    void PaintHeaderLayer(BufferPainter& p) const;
-    void PaintContentLayer(BufferPainter& p) const;
+    // helpers
+    static void ClearChildren(ParentCtrl& p);
+    void RebuildItemsFromChildrenIfNeeded();
+    int  MeasureNaturalPrimaryForWidth(int pane_w) const;
+    int  MeasureNaturalPrimaryForHeight(int pane_h) const;
+    void LayoutStackV(const Rect& inner);
+    void LayoutStackH(const Rect& inner);
+    void LayoutWrapH (const Rect& inner);
+    int  HeaderHeight() const;
+
+    // style helpers
+    HeaderAlign EffectiveBadgeAlign() const;
+    Rect        EffectiveContentInset() const;
+    void        DrawBadgeGlyph(Draw& w, const Rect& rc) const;
 };
 
 } // namespace Upp

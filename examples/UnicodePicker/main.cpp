@@ -1,619 +1,771 @@
-
 #include <CtrlLib/CtrlLib.h>
 #include <Painter/Painter.h>
-#include <StageCard/StageCard.h>   // needed for demo StageCard
+#include <StageCard/StageCard.h>
 
 using namespace Upp;
 
-// ---------------------------------------------------------------------
-// Basic symbol types used across the picker/cards
-// ---------------------------------------------------------------------
-struct SymbolItem : Moveable<SymbolItem> {
-    String charCode;     // UTF-8 glyph (e.g., "→")
-    String name;         // Human-friendly name (e.g., "Right Arrow")
-    String categoryKey;  // Category key (e.g., "nav1")
+// ============================================================================
+// THEME (centralized knobs)
+// ============================================================================
 
+static inline Color ButtonFaceRed() { return Color(235, 66, 33); } 
+static inline Color ButtonFaceGreen() { return Color(66, 235, 33); } 
+static inline Color ButtonFaceBlue() { return Color(37, 99, 235); } 
+static inline Color ButtonFaceGray() { return Color(70, 70, 70); } //
+
+struct AppTheme {
+    String name;
+    Color  window_bg;
+
+    // StageCard content paper + code paper
+    Color  card_content_bg;
+    Color  code_content_bg;
+
+    // Buttons / chips
+    Color  chip_face_a;
+    Color  chip_face_b;
+    Color  chip_border;
+    Color  chip_ink;
+
+    // Symbol tiles
+    Color  tile_face;
+    Color  tile_border;
+    Color  tile_ink;
+
+    // Bin dashed frame color
+    Color  bin_stroke;
+
+    // StageCard::Style factory for header/ink/underline + stateless borders
+    StageCard::Style (*make_style)();
+};
+
+static StageCard::Style MakeLightStyle()
+{
+    StageCard::Style s = StageCard::StyleDefault();
+    auto set4 = [](Color* a, Color n, Color h, Color p, Color d){ a[0]=n; a[1]=h; a[2]=p; a[3]=d; };
+
+    const Color faceN = Color(250,250,252);
+    set4(s.palette.headerFace,  faceN, Blend(faceN, White(), 8),  Blend(faceN, Black(), 10),
+         Blend(SColorFace(), SColorPaper(), 60));
+
+    const Color bordN = SColorShadow();
+    set4(s.palette.headerBorder,bordN, Blend(bordN, SColorHighlight(), 20),
+         Blend(bordN, Black(), 15), Blend(bordN, SColorDisabled(), 35));
+
+    const Color t = SColorText();
+    set4(s.palette.titleInk,    t, t, t, SColorDisabled());
+    set4(s.palette.subTitleInk, t, t, t, SColorDisabled());
+    set4(s.palette.badgeInk,    t, t, t, SColorDisabled());
+
+    s.palette.contentBg  = SColorPaper();
+    s.palette.contentInk = SColorText();
+    s.palette.cardBorder = SColorShadow();
+    s.palette.cardFill   = Color(240,240,240);
+    s.palette.underline  = GrayColor(180);
+
+    s.metrics.titleUnderlineTh  = 1;
+    s.metrics.badgeAlignDefault = StageCard::RIGHT;
+    return s;
+}
+
+static StageCard::Style MakeMidnightStyle()
+{
+    StageCard::Style s = StageCard::StyleDefault();
+    auto set4 = [](Color* a, Color n, Color h, Color p, Color d){ a[0]=n; a[1]=h; a[2]=p; a[3]=d; };
+
+    const Color faceN = Color(28,32,38);
+    set4(s.palette.headerFace,  faceN, Blend(faceN, SColorHighlight(), 18),
+         Blend(faceN, Black(), 12), Blend(SColorFace(), SColorPaper(), 70));
+
+    const Color bordN = Color(65,72,84);
+    set4(s.palette.headerBorder,bordN, Blend(bordN, SColorHighlight(), 25),
+         Blend(bordN, Black(), 18), Blend(bordN, SColorDisabled(), 40));
+
+    const Color tN   = ButtonFaceBlue();
+    const Color tSub = Color(37, 99, 235);
+    set4(s.palette.titleInk,    tN,   tN,   tN,   SColorDisabled());
+    set4(s.palette.subTitleInk, tSub, tSub, tSub, SColorDisabled());
+    set4(s.palette.badgeInk,    Color(200,220,255), Color(200,220,255),
+         Color(200,220,255), SColorDisabled());
+
+    s.palette.contentBg  = Color(28,30,34);
+    s.palette.contentInk = SColorText();
+    s.palette.cardBorder = Color(65,72,84);
+    s.palette.cardFill   = Color(40,44,50);
+    s.palette.underline  = Color(60,68,80);
+
+    s.metrics.titleUnderlineTh  = 2;
+    s.metrics.badgeAlignDefault = StageCard::LEFT;
+    return s;
+}
+
+// theme array
+static const AppTheme THEMES[] = {
+    {
+        "Light",
+        SColorPaper(),                 // window_bg
+        SColorPaper(),                 // card_content_bg
+        Color(28,30,34),               // code_content_bg
+        Blend(Color(235,239,248), SColorFace(), 20), // chip_face_a
+        Blend(ButtonFaceBlue(), ButtonFaceBlue(), 40), // chip_face_b
+        SColorShadow(),                // chip_border
+        SColorText(),                  // chip_ink
+        Color(245,245,245),            // tile_face
+        GrayColor(120),                // tile_border
+        Black(),                       // tile_ink
+        SColorShadow(),                // bin_stroke
+        &MakeLightStyle
+    },
+    {
+        "Midnight",
+        Color(18,20,23),               // window_bg
+        Color(28,30,34),               // card_content_bg
+        Color(28,30,34),               // code_content_bg
+        Color(44,44,44),               // chip_face_a
+        Color(70,70,70),               // chip_face_b
+        Color(65,72,84),               // chip_border
+        Color(200,220,255),            // chip_ink
+        Color(54,54,54),               // tile_face
+        Color(70,70,70),               // tile_border
+        White(),                       // tile_ink
+        Color(90,140,210),             // bin_stroke (visible dashed)
+        &MakeMidnightStyle
+    }
+};
+
+// percentage blend helper (0..100)
+static inline Color BlendPct(Color a, Color b, int pct) {
+    pct = clamp(pct, 0, 100);
+    return Blend(a, b, pct);
+}
+
+// ============================================================================
+// DATA (categories & symbols)
+// ============================================================================
+struct SymbolItem : Moveable<SymbolItem> {
+    String charCode, name, categoryKey;
     SymbolItem() {}
     SymbolItem(const String& code, const String& n, const String& catKey)
         : charCode(code), name(n), categoryKey(catKey) {}
 };
 
 struct SymbolCategory : Moveable<SymbolCategory> {
-    String name;             // Display name (with numeric prefix if you like)
-    String key;              // Stable key used for filtering
-    Color  col = Color(90,90,90);   // pastel category color
+    String name, key;
     Vector<SymbolItem> symbols;
 };
 
-// Global category list
 Vector<SymbolCategory> allCategories;
 
-// ---------------------------------------------------------------------
-// InitData — populate allCategories with demo data (with pastel colors)
-// ---------------------------------------------------------------------
-static inline void InitData() {
+static void InitData()
+{
     allCategories.Clear();
 
-	const Color P1  = Color(120,170,235);  // cornflower-ish
-	const Color P2  = Color(110,162,230);
-	const Color P3  = Color(105,155,225);
-	const Color P4  = Color(100,150,220);
-	const Color P5  = Color( 95,145,215);
-	const Color P6  = Color( 90,140,210);
-	const Color P7  = Color( 85,135,205);
-	const Color P8  = Color( 80,130,200);
-	const Color P9  = Color( 76,126,196);
-	const Color P10 = Color( 72,122,192);
-	const Color P11 = Color( 68,118,188);
-	const Color P12 = Color( 64,114,184);
-	const Color P13 = Color( 60,110,180);
-	const Color P14 = Color( 56,106,176);
-	const Color P15 = Color( 52,102,172);
-	const Color P16 = Color( 48, 98,168);
-	const Color P17 = Color( 44, 94,164);
-	const Color P18 = Color( 40, 90,160);
-	const Color P19 = Color( 36, 86,156);
-	const Color P20 = Color( 32, 82,152);
-
-    // 1. Navigation & Arrows 1.0
+    // Arrows
     {
-        SymbolCategory cat;
-        cat.name = "Navigation & Arrows 1.0";
-        cat.key  = "nav1";
-        cat.col  = P1;
-        cat.symbols.Add(SymbolItem{"→", "Right Arrow", "nav1"});
-        cat.symbols.Add(SymbolItem{"←", "Left Arrow",  "nav1"});
-        cat.symbols.Add(SymbolItem{"↑", "Up Arrow",    "nav1"});
-        cat.symbols.Add(SymbolItem{"↓", "Down Arrow",  "nav1"});
-        cat.symbols.Add(SymbolItem{"►", "Right Triangle", "nav1"});
-        cat.symbols.Add(SymbolItem{"▼", "Down Triangle",  "nav1"});
-        cat.symbols.Add(SymbolItem{"«", "Double Left",  "nav1"});
-        cat.symbols.Add(SymbolItem{"»", "Double Right", "nav1"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Arrows"; c.key="arrows"; 
+        c.symbols
+            << SymbolItem{"→","Right Arrow","arrows"} << SymbolItem{"←","Left Arrow","arrows"}
+            << SymbolItem{"↑","Up Arrow","arrows"}    << SymbolItem{"↓","Down Arrow","arrows"}
+            << SymbolItem{"↔","Left-Right Arrow","arrows"} << SymbolItem{"↕","Up-Down Arrow","arrows"}
+            << SymbolItem{"►","Right Triangle","arrows"}   << SymbolItem{"▼","Down Triangle","arrows"}
+            << SymbolItem{"«","Double Left","arrows"}      << SymbolItem{"»","Double Right","arrows"}
+            << SymbolItem{"⤓","Down Arrow with Bar","arrows"} << SymbolItem{"⤒","Up Arrow with Bar","arrows"}
+            << SymbolItem{"⟵","Long Left Arrow","arrows"}  << SymbolItem{"⟶","Long Right Arrow","arrows"}
+            << SymbolItem{"⟷","Long Left-Right Arrow","arrows"} << SymbolItem{"⟹","Long Right Double Arrow","arrows"}
+            << SymbolItem{"⟺","Long Left-Right Double Arrow","arrows"}
+            << SymbolItem{"⇤","Leftward Tab","arrows"} << SymbolItem{"⇥","Rightward Tab","arrows"}
+            << SymbolItem{"↩","Return/Hook Left","arrows"} << SymbolItem{"↪","Hook Right","arrows"}
+            << SymbolItem{"⤴","Arrow Right-Up","arrows"}   << SymbolItem{"⤵","Arrow Right-Down","arrows"}
+            << SymbolItem{"↘","South-East Arrow","arrows"} << SymbolItem{"↙","South-West Arrow","arrows"}
+            << SymbolItem{"↖","North-West Arrow","arrows"} << SymbolItem{"↗","North-East Arrow","arrows"}
+            << SymbolItem{"⇀","Right Harpoon Above","arrows"} << SymbolItem{"↼","Left Harpoon Above","arrows"}
+            << SymbolItem{"⇌","Equilibrium Arrows","arrows"};
+        allCategories.Add(pick(c));
     }
-
-    // 2. Toggle & State
+    // Toggle & State
     {
-        SymbolCategory cat;
-        cat.name = "Toggle & State";
-        cat.key  = "toggle";
-        cat.col  = P2;
-        cat.symbols.Add(SymbolItem{"+", "Plus (Expand)",      "toggle"});
-        cat.symbols.Add(SymbolItem{"−", "Minus (Collapse)",   "toggle"});
-        cat.symbols.Add(SymbolItem{"✓", "Checkmark",          "toggle"});
-        cat.symbols.Add(SymbolItem{"✗", "Ballot X",           "toggle"});
-        cat.symbols.Add(SymbolItem{"□", "Unchecked Box",      "toggle"});
-        cat.symbols.Add(SymbolItem{"☑", "Checked Box",        "toggle"});
-        cat.symbols.Add(SymbolItem{"•", "Bullet Point",       "toggle"});
-        cat.symbols.Add(SymbolItem{"⊛", "Circled Star",       "toggle"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Toggle & State"; c.key="toggle"; 
+        c.symbols << SymbolItem{"+","Plus (Expand)","toggle"} << SymbolItem{"−","Minus (Collapse)","toggle"}
+                  << SymbolItem{"✓","Checkmark","toggle"}     << SymbolItem{"✗","Ballot X","toggle"}
+                  << SymbolItem{"□","Unchecked Box","toggle"} << SymbolItem{"☑","Checked Box","toggle"}
+                  << SymbolItem{"•","Bullet Point","toggle"}  << SymbolItem{"⊛","Circled Star","toggle"};
+        allCategories.Add(pick(c));
     }
-
-    // 3. Status & Alert
+    // Status & Alert
     {
-        SymbolCategory cat;
-        cat.name = "Status & Alert";
-        cat.key  = "status";
-        cat.col  = P3;
-        cat.symbols.Add(SymbolItem{"ℹ️", "Info Icon",        "status"});
-        cat.symbols.Add(SymbolItem{"⚠️", "Warning Sign",     "status"});
-        cat.symbols.Add(SymbolItem{"❌", "Error/Close",      "status"});
-        cat.symbols.Add(SymbolItem{"🔒", "Locked/Secure",    "status"});
-        cat.symbols.Add(SymbolItem{"🔔", "Bell/Notification","status"});
-        cat.symbols.Add(SymbolItem{"⚡",  "High Priority",    "status"});
-        cat.symbols.Add(SymbolItem{"💡", "Idea/Tip",         "status"});
-        cat.symbols.Add(SymbolItem{"🔥", "Hot/Popular",      "status"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Status & Alert"; c.key="status"; 
+        c.symbols << SymbolItem{"ℹ️","Info Icon","status"} << SymbolItem{"⚠️","Warning Sign","status"}
+                  << SymbolItem{"❌","Error/Close","status"} << SymbolItem{"🔒","Locked/Secure","status"}
+                  << SymbolItem{"🔔","Bell/Notification","status"} << SymbolItem{"⚡","High Priority","status"}
+                  << SymbolItem{"💡","Idea/Tip","status"} << SymbolItem{"🔥","Hot/Popular","status"};
+        allCategories.Add(pick(c));
     }
-
-    // 4. Structural & Layout
+    // Structural & Layout
     {
-        SymbolCategory cat;
-        cat.name = "Structural & Layout";
-        cat.key  = "layout";
-        cat.col  = P4;
-        cat.symbols.Add(SymbolItem{"▥", "Square Blocks 1 (Panel)", "layout"});
-        cat.symbols.Add(SymbolItem{"▤", "Square Blocks 2",         "layout"});
-        cat.symbols.Add(SymbolItem{"▦", "Square Blocks 3 (Grid)",  "layout"});
-        cat.symbols.Add(SymbolItem{"≡", "Hamburger Menu",          "layout"});
-        cat.symbols.Add(SymbolItem{"⋮", "Vertical Ellipsis",       "layout"});
-        cat.symbols.Add(SymbolItem{"⋯", "Horizontal Ellipsis",     "layout"});
-        cat.symbols.Add(SymbolItem{"⌗", "Hash/Number",             "layout"});
-        cat.symbols.Add(SymbolItem{"…", "More Dots",               "layout"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Structural & Layout"; c.key="layout"; 
+        c.symbols << SymbolItem{"▥","Square Blocks 1 (Panel)","layout"} << SymbolItem{"▤","Square Blocks 2","layout"}
+                  << SymbolItem{"▦","Square Blocks 3 (Grid)","layout"}  << SymbolItem{"≡","Hamburger Menu","layout"}
+                  << SymbolItem{"⋮","Vertical Ellipsis","layout"}       << SymbolItem{"⋯","Horizontal Ellipsis","layout"}
+                  << SymbolItem{"⌗","Hash/Number","layout"}             << SymbolItem{"…","More Dots","layout"};
+        allCategories.Add(pick(c));
     }
-
-    // 5. Files & Document
+    // Files & Document
     {
-        SymbolCategory cat;
-        cat.name = "Files & Document";
-        cat.key  = "files";
-        cat.col  = P5;
-        cat.symbols.Add(SymbolItem{"📁", "Folder",          "files"});
-        cat.symbols.Add(SymbolItem{"📄", "File/Document",   "files"});
-        cat.symbols.Add(SymbolItem{"💾", "Save Disk",       "files"});
-        cat.symbols.Add(SymbolItem{"🖼️", "Image/Media",     "files"});
-        cat.symbols.Add(SymbolItem{"🔗", "Link/External",   "files"});
-        cat.symbols.Add(SymbolItem{"🔍", "Search/Zoom",     "files"});
-        cat.symbols.Add(SymbolItem{"✂️", "Scissors (Cut)",  "files"});
-        cat.symbols.Add(SymbolItem{"📥", "Inbox/Receive",   "files"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Files & Document"; c.key="files";
+        c.symbols << SymbolItem{"📁","Folder","files"} << SymbolItem{"📄","File/Document","files"}
+                  << SymbolItem{"💾","Save Disk","files"} << SymbolItem{"🖼️","Image/Media","files"}
+                  << SymbolItem{"🔗","Link/External","files"} << SymbolItem{"🔍","Search/Zoom","files"}
+                  << SymbolItem{"✂️","Scissors (Cut)","files"} << SymbolItem{"📥","Inbox/Receive","files"};
+        allCategories.Add(pick(c));
     }
-
-    // 6. Time & Date
+    // Time & Date
     {
-        SymbolCategory cat;
-        cat.name = "Time & Date";
-        cat.key  = "time";
-        cat.col  = P6;
-        cat.symbols.Add(SymbolItem{"📅", "Calendar/Date", "time"});
-        cat.symbols.Add(SymbolItem{"⏱️", "Stopwatch/Time","time"});
-        cat.symbols.Add(SymbolItem{"⌚",  "Watch/Time",    "time"});
-        cat.symbols.Add(SymbolItem{"⏳", "Hourglass",     "time"});
-        cat.symbols.Add(SymbolItem{"↩️", "Undo/Back",     "time"});
-        cat.symbols.Add(SymbolItem{"↪️", "Redo/Forward",  "time"});
-        cat.symbols.Add(SymbolItem{"🔅", "Brightness",    "time"});
-        cat.symbols.Add(SymbolItem{"🌙", "Night Mode",    "time"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Time & Date"; c.key="time";
+        c.symbols << SymbolItem{"📅","Calendar/Date","time"} << SymbolItem{"⏱️","Stopwatch/Time","time"}
+                  << SymbolItem{"⌚","Watch/Time","time"}    << SymbolItem{"⏳","Hourglass","time"}
+                  << SymbolItem{"↩️","Undo/Back","time"}    << SymbolItem{"↪️","Redo/Forward","time"}
+                  << SymbolItem{"🔅","Brightness","time"}   << SymbolItem{"🌙","Night Mode","time"};
+        allCategories.Add(pick(c));
     }
-
-    // 7. Math & Logic
+    // Math & Logic
     {
-        SymbolCategory cat;
-        cat.name = "Math & Logic";
-        cat.key  = "math";
-        cat.col  = P7;
-        cat.symbols.Add(SymbolItem{"=",  "Equals",           "math"});
-        cat.symbols.Add(SymbolItem{"≠",  "Not Equal",        "math"});
-        cat.symbols.Add(SymbolItem{"≈",  "Almost Equal",     "math"});
-        cat.symbols.Add(SymbolItem{"≤",  "Less or Equal",    "math"});
-        cat.symbols.Add(SymbolItem{"≥",  "Greater or Equal", "math"});
-        cat.symbols.Add(SymbolItem{"∑",  "Summation",        "math"});
-        cat.symbols.Add(SymbolItem{"∞",  "Infinity",         "math"});
-        cat.symbols.Add(SymbolItem{"÷",  "Division Sign",    "math"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Math & Logic"; c.key="math"; 
+        c.symbols << SymbolItem{"=","Equals","math"} << SymbolItem{"≠","Not Equal","math"}
+                  << SymbolItem{"≈","Almost Equal","math"} << SymbolItem{"≤","Less or Equal","math"}
+                  << SymbolItem{"≥","Greater or Equal","math"} << SymbolItem{"∑","Summation","math"}
+                  << SymbolItem{"∞","Infinity","math"} << SymbolItem{"÷","Division Sign","math"};
+        allCategories.Add(pick(c));
     }
-
-    // 8. People & Contact
+    // People & Contact
     {
-        SymbolCategory cat;
-        cat.name = "People & Contact";
-        cat.key  = "people";
-        cat.col  = P8;
-        cat.symbols.Add(SymbolItem{"👤", "User (Single)", "people"});
-        cat.symbols.Add(SymbolItem{"👥", "Users (Group)", "people"});
-        cat.symbols.Add(SymbolItem{"🏠", "Home/Main",     "people"});
-        cat.symbols.Add(SymbolItem{"📍", "Location Pin",  "people"});
-        cat.symbols.Add(SymbolItem{"🗺️", "Map/Guide",     "people"});
-        cat.symbols.Add(SymbolItem{"✍️", "Writing/Edit",  "people"});
-        cat.symbols.Add(SymbolItem{"📞", "Phone/Call",    "people"});
-        cat.symbols.Add(SymbolItem{"📧", "Email",         "people"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="People & Contact"; c.key="people";
+        c.symbols << SymbolItem{"👤","User (Single)","people"} << SymbolItem{"👥","Users (Group)","people"}
+                  << SymbolItem{"🏠","Home/Main","people"}     << SymbolItem{"📍","Location Pin","people"}
+                  << SymbolItem{"🗺️","Map/Guide","people"}     << SymbolItem{"✍️","Writing/Edit","people"}
+                  << SymbolItem{"📞","Phone/Call","people"}     << SymbolItem{"📧","Email","people"};
+        allCategories.Add(pick(c));
     }
-
-    // 9. Media & Controls
+    // Media & Controls
     {
-        SymbolCategory cat;
-        cat.name = "Media & Controls";
-        cat.key  = "media";
-        cat.col  = P9;
-        cat.symbols.Add(SymbolItem{"▶️", "Play/Start",    "media"});
-        cat.symbols.Add(SymbolItem{"⏸️", "Pause",         "media"});
-        cat.symbols.Add(SymbolItem{"⏹️", "Stop",          "media"});
-        cat.symbols.Add(SymbolItem{"🔇", "Mute",          "media"});
-        cat.symbols.Add(SymbolItem{"🔊", "Volume Max",    "media"});
-        cat.symbols.Add(SymbolItem{"🎧", "Headphones",    "media"});
-        cat.symbols.Add(SymbolItem{"⬇️", "Download",      "media"});
-        cat.symbols.Add(SymbolItem{"⬆️", "Upload",        "media"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Media & Controls"; c.key="media"; 
+        c.symbols << SymbolItem{"▶️","Play/Start","media"} << SymbolItem{"⏸️","Pause","media"}
+                  << SymbolItem{"⏹️","Stop","media"}       << SymbolItem{"🔇","Mute","media"}
+                  << SymbolItem{"🔊","Volume Max","media"} << SymbolItem{"🎧","Headphones","media"}
+                  << SymbolItem{"⬇️","Download","media"}   << SymbolItem{"⬆️","Upload","media"};
+        allCategories.Add(pick(c));
     }
-
-    // 10. Tools & Settings
+    // Tools & Settings
     {
-        SymbolCategory cat;
-        cat.name = "Tools & Settings";
-        cat.key  = "tools";
-        cat.col  = P10;
-        cat.symbols.Add(SymbolItem{"⚙️", "Gear/Settings",   "tools"});
-        cat.symbols.Add(SymbolItem{"🛠️", "Hammer/Tools",    "tools"});
-        cat.symbols.Add(SymbolItem{"🔑", "Key/Access",       "tools"});
-        cat.symbols.Add(SymbolItem{"✏️", "Pencil/Edit",      "tools"});
-        cat.symbols.Add(SymbolItem{"🗑️", "Trash/Delete",     "tools"});
-        cat.symbols.Add(SymbolItem{"🖨️", "Printer",          "tools"});
-        cat.symbols.Add(SymbolItem{"🧾", "Receipt/Billing",  "tools"});
-        cat.symbols.Add(SymbolItem{"📈", "Chart/Analytics",  "tools"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Tools & Settings"; c.key="tools"; 
+        c.symbols << SymbolItem{"⚙️","Gear/Settings","tools"} << SymbolItem{"🛠️","Hammer/Tools","tools"}
+                  << SymbolItem{"🔑","Key/Access","tools"}    << SymbolItem{"✏️","Pencil/Edit","tools"}
+                  << SymbolItem{"🗑️","Trash/Delete","tools"}  << SymbolItem{"🖨️","Printer","tools"}
+                  << SymbolItem{"🧾","Receipt/Billing","tools"} << SymbolItem{"📈","Chart/Analytics","tools"};
+        allCategories.Add(pick(c));
     }
-
-    // 11. Communication & Text
+    // Communication & Text
     {
-        SymbolCategory cat;
-        cat.name = "Communication & Text";
-        cat.key  = "comm";
-        cat.col  = P11;
-        cat.symbols.Add(SymbolItem{"💬", "Chat Bubble",             "comm"});
-        cat.symbols.Add(SymbolItem{"📣", "Megaphone/Announce",      "comm"});
-        cat.symbols.Add(SymbolItem{"🗣️", "Speaking Head",           "comm"});
-        cat.symbols.Add(SymbolItem{"📢", "Loudspeaker",             "comm"});
-        cat.symbols.Add(SymbolItem{"🎙️", "Microphone",             "comm"});
-        cat.symbols.Add(SymbolItem{"🔤", "Input Latin Letters",     "comm"});
-        cat.symbols.Add(SymbolItem{"…",  "Ellipsis/More",           "comm"});
-        cat.symbols.Add(SymbolItem{"¶",  "Pilcrow (Paragraph)",     "comm"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Communication & Text"; c.key="comm"; 
+        c.symbols << SymbolItem{"💬","Chat Bubble","comm"} << SymbolItem{"📣","Megaphone/Announce","comm"}
+                  << SymbolItem{"🗣️","Speaking Head","comm"} << SymbolItem{"📢","Loudspeaker","comm"}
+                  << SymbolItem{"🎙️","Microphone","comm"}    << SymbolItem{"🔤","Input Latin Letters","comm"}
+                  << SymbolItem{"…","Ellipsis/More","comm"}   << SymbolItem{"¶","Pilcrow (Paragraph)","comm"};
+        allCategories.Add(pick(c));
     }
-
-    // 12. Shapes & Geometry
+    // Shapes & Geometry
     {
-        SymbolCategory cat;
-        cat.name = "Shapes & Geometry";
-        cat.key  = "shapes";
-        cat.col  = P12;
-        cat.symbols.Add(SymbolItem{"■", "Black Square",         "shapes"});
-        cat.symbols.Add(SymbolItem{"□", "White Square",         "shapes"});
-        cat.symbols.Add(SymbolItem{"●", "Black Circle",         "shapes"});
-        cat.symbols.Add(SymbolItem{"○", "White Circle",         "shapes"});
-        cat.symbols.Add(SymbolItem{"◆", "Black Diamond",        "shapes"});
-        cat.symbols.Add(SymbolItem{"◇", "White Diamond",        "shapes"});
-        cat.symbols.Add(SymbolItem{"△", "White Triangle Up",    "shapes"});
-        cat.symbols.Add(SymbolItem{"▽", "White Triangle Down",  "shapes"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Shapes & Geometry"; c.key="shapes";
+        c.symbols << SymbolItem{"■","Black Square","shapes"} << SymbolItem{"□","White Square","shapes"}
+                  << SymbolItem{"●","Black Circle","shapes"} << SymbolItem{"○","White Circle","shapes"}
+                  << SymbolItem{"◆","Black Diamond","shapes"}<< SymbolItem{"◇","White Diamond","shapes"}
+                  << SymbolItem{"△","White Triangle Up","shapes"} << SymbolItem{"▽","White Triangle Down","shapes"};
+        allCategories.Add(pick(c));
     }
-
-    // 13. Currency & Finance
+    // Currency & Finance
     {
-        SymbolCategory cat;
-        cat.name = "Currency & Finance";
-        cat.key  = "currency";
-        cat.col  = P13;
-        cat.symbols.Add(SymbolItem{"$",  "Dollar Sign",  "currency"});
-        cat.symbols.Add(SymbolItem{"€",  "Euro Sign",    "currency"});
-        cat.symbols.Add(SymbolItem{"£",  "Pound Sign",   "currency"});
-        cat.symbols.Add(SymbolItem{"¥",  "Yen Sign",     "currency"});
-        cat.symbols.Add(SymbolItem{"💰", "Money Bag",    "currency"});
-        cat.symbols.Add(SymbolItem{"🪙", "Coin",         "currency"});
-        cat.symbols.Add(SymbolItem{"💳", "Credit Card",  "currency"});
-        cat.symbols.Add(SymbolItem{"🏦", "Bank",         "currency"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Currency & Finance"; c.key="currency";
+        c.symbols << SymbolItem{"$","Dollar Sign","currency"} << SymbolItem{"€","Euro Sign","currency"}
+                  << SymbolItem{"£","Pound Sign","currency"}  << SymbolItem{"¥","Yen Sign","currency"}
+                  << SymbolItem{"💰","Money Bag","currency"}  << SymbolItem{"🪙","Coin","currency"}
+                  << SymbolItem{"💳","Credit Card","currency"}<< SymbolItem{"🏦","Bank","currency"};
+        allCategories.Add(pick(c));
     }
-
-    // 14. Arrows 2.0 (Curved/Move)
+    // Accessibility & Gestures
     {
-        SymbolCategory cat;
-        cat.name = "Arrows 2.0 (Curved/Move)";
-        cat.key  = "nav2";
-        cat.col  = P14;
-        cat.symbols.Add(SymbolItem{"↱", "Up Right Arrow",       "nav2"});
-        cat.symbols.Add(SymbolItem{"↲", "Up Left Arrow",        "nav2"});
-        cat.symbols.Add(SymbolItem{"↶", "Curved Left",          "nav2"});
-        cat.symbols.Add(SymbolItem{"↷", "Curved Right",         "nav2"});
-        cat.symbols.Add(SymbolItem{"⤓", "Down Arrow with Line", "nav2"});
-        cat.symbols.Add(SymbolItem{"⤒", "Up Arrow with Line",   "nav2"});
-        cat.symbols.Add(SymbolItem{"⇥", "Tab Arrow Right",      "nav2"});
-        cat.symbols.Add(SymbolItem{"⇤", "Tab Arrow Left",       "nav2"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Accessibility & Gestures"; c.key="access";
+        c.symbols << SymbolItem{"♿","Wheelchair Symbol","access"} << SymbolItem{"👁️","Eye/Visibility","access"}
+                  << SymbolItem{"👂","Ear/Hearing","access"}      << SymbolItem{"☝️","Index Finger Up","access"}
+                  << SymbolItem{"👌","OK Hand","access"}          << SymbolItem{"🤚","Raised Hand","access"}
+                  << SymbolItem{"🗣️","Speaking Head","access"}    << SymbolItem{"🫲","Handshake","access"};
+        allCategories.Add(pick(c));
     }
-
-    // 15. Accessibility & Gestures
+    // Keyboard & Input
     {
-        SymbolCategory cat;
-        cat.name = "Accessibility & Gestures";
-        cat.key  = "access";
-        cat.col  = P15;
-        cat.symbols.Add(SymbolItem{"♿",  "Wheelchair Symbol", "access"});
-        cat.symbols.Add(SymbolItem{"👁️", "Eye/Visibility",    "access"});
-        cat.symbols.Add(SymbolItem{"👂",  "Ear/Hearing",       "access"});
-        cat.symbols.Add(SymbolItem{"☝️", "Index Finger Up",   "access"});
-        cat.symbols.Add(SymbolItem{"👌",  "OK Hand",           "access"});
-        cat.symbols.Add(SymbolItem{"🤚",  "Raised Hand",       "access"});
-        cat.symbols.Add(SymbolItem{"🗣️", "Speaking Head",     "access"});
-        cat.symbols.Add(SymbolItem{"🫲",  "Handshake",         "access"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Keyboard & Input"; c.key="keyboard"; 
+        c.symbols << SymbolItem{"⌃","Control Key","keyboard"} << SymbolItem{"⌥","Option Key","keyboard"}
+                  << SymbolItem{"⌘","Command Key","keyboard"} << SymbolItem{"↩","Return Key","keyboard"}
+                  << SymbolItem{"⇧","Shift Key","keyboard"}   << SymbolItem{"⇥","Tab Key","keyboard"}
+                  << SymbolItem{"⌦","Delete Forward","keyboard"} << SymbolItem{"⌫","Delete Backward","keyboard"};
+        allCategories.Add(pick(c));
     }
-
-    // 16. Keyboard & Input
+    // Weather & Environment
     {
-        SymbolCategory cat;
-        cat.name = "Keyboard & Input";
-        cat.key  = "keyboard";
-        cat.col  = P16;
-        cat.symbols.Add(SymbolItem{"⌃", "Control Key",     "keyboard"});
-        cat.symbols.Add(SymbolItem{"⌥", "Option Key",      "keyboard"});
-        cat.symbols.Add(SymbolItem{"⌘", "Command Key",     "keyboard"});
-        cat.symbols.Add(SymbolItem{"↩", "Return Key",      "keyboard"});
-        cat.symbols.Add(SymbolItem{"⇧", "Shift Key",       "keyboard"});
-        cat.symbols.Add(SymbolItem{"⇥", "Tab Key",         "keyboard"});
-        cat.symbols.Add(SymbolItem{"⌦", "Delete Forward",  "keyboard"});
-        cat.symbols.Add(SymbolItem{"⌫", "Delete Backward", "keyboard"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Weather & Environment"; c.key="weather";
+        c.symbols << SymbolItem{"☀️","Sun","weather"} << SymbolItem{"☁️","Cloud","weather"}
+                  << SymbolItem{"☔","Rain/Umbrella","weather"} << SymbolItem{"❄️","Snowflake","weather"}
+                  << SymbolItem{"🌡️","Thermometer","weather"}  << SymbolItem{"🌀","Cyclone","weather"}
+                  << SymbolItem{"🌍","Globe","weather"}         << SymbolItem{"🌿","Plant/Nature","weather"};
+        allCategories.Add(pick(c));
     }
-
-    // 17. Weather & Environment
+    // Rating & Feedback
     {
-        SymbolCategory cat;
-        cat.name = "Weather & Environment";
-        cat.key  = "weather";
-        cat.col  = P17;
-        cat.symbols.Add(SymbolItem{"☀️", "Sun",          "weather"});
-        cat.symbols.Add(SymbolItem{"☁️", "Cloud",        "weather"});
-        cat.symbols.Add(SymbolItem{"☔",  "Rain/Umbrella","weather"});
-        cat.symbols.Add(SymbolItem{"❄️", "Snowflake",    "weather"});
-        cat.symbols.Add(SymbolItem{"🌡️", "Thermometer",  "weather"});
-        cat.symbols.Add(SymbolItem{"🌀",  "Cyclone",      "weather"});
-        cat.symbols.Add(SymbolItem{"🌍",  "Globe",        "weather"});
-        cat.symbols.Add(SymbolItem{"🌿",  "Plant/Nature", "weather"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Rating & Feedback"; c.key="rating"; 
+        c.symbols << SymbolItem{"⭐","Star","rating"} << SymbolItem{"♡","Heart (Outline)","rating"}
+                  << SymbolItem{"♥","Heart (Filled)","rating"} << SymbolItem{"👍","Thumbs Up","rating"}
+                  << SymbolItem{"👎","Thumbs Down","rating"}    << SymbolItem{"💯","Hundred Points","rating"}
+                  << SymbolItem{"🎯","Target/Goal","rating"}    << SymbolItem{"🏅","Medal/Award","rating"};
+        allCategories.Add(pick(c));
     }
-
-    // 18. Rating & Feedback
+    // Scientific & Technical
     {
-        SymbolCategory cat;
-        cat.name = "Rating & Feedback";
-        cat.key  = "rating";
-        cat.col  = P18;
-        cat.symbols.Add(SymbolItem{"⭐",  "Star",              "rating"});
-        cat.symbols.Add(SymbolItem{"♡",  "Heart (Outline)",   "rating"});
-        cat.symbols.Add(SymbolItem{"♥",  "Heart (Filled)",    "rating"});
-        cat.symbols.Add(SymbolItem{"👍", "Thumbs Up",         "rating"});
-        cat.symbols.Add(SymbolItem{"👎", "Thumbs Down",       "rating"});
-        cat.symbols.Add(SymbolItem{"💯", "Hundred Points",    "rating"});
-        cat.symbols.Add(SymbolItem{"🎯", "Target/Goal",       "rating"});
-        cat.symbols.Add(SymbolItem{"🏅", "Medal/Award",       "rating"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Scientific & Technical"; c.key="science"; 
+        c.symbols << SymbolItem{"°","Degree Symbol","science"} << SymbolItem{"µ","Micro Sign","science"}
+                  << SymbolItem{"Ω","Ohm","science"}           << SymbolItem{"∆","Delta/Change","science"}
+                  << SymbolItem{"λ","Lambda","science"}         << SymbolItem{"∅","Empty Set/Diameter","science"}
+                  << SymbolItem{"🧪","Test Tube","science"}     << SymbolItem{"🧬","DNA","science"};
+        allCategories.Add(pick(c));
     }
-
-    // 19. Scientific & Technical
+    // Punctuation & Typography
     {
-        SymbolCategory cat;
-        cat.name = "Scientific & Technical";
-        cat.key  = "science";
-        cat.col  = P19;
-        cat.symbols.Add(SymbolItem{"°", "Degree Symbol",        "science"});
-        cat.symbols.Add(SymbolItem{"µ", "Micro Sign",           "science"});
-        cat.symbols.Add(SymbolItem{"Ω", "Ohm",                  "science"});
-        cat.symbols.Add(SymbolItem{"∆", "Delta/Change",         "science"});
-        cat.symbols.Add(SymbolItem{"λ", "Lambda",               "science"});
-        cat.symbols.Add(SymbolItem{"∅", "Empty Set/Diameter",   "science"});
-        cat.symbols.Add(SymbolItem{"🧪", "Test Tube",           "science"});
-        cat.symbols.Add(SymbolItem{"🧬", "DNA",                 "science"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Punctuation & Typography"; c.key="punc"; 
+        c.symbols << SymbolItem{"«","Left Guillemet","punc"} << SymbolItem{"»","Right Guillemet","punc"}
+                  << SymbolItem{"—","Em Dash","punc"}         << SymbolItem{"–","En Dash","punc"}
+                  << SymbolItem{"§","Section Sign","punc"}    << SymbolItem{"†","Dagger","punc"}
+                  << SymbolItem{"©","Copyright","punc"}       << SymbolItem{"®","Registered","punc"};
+        allCategories.Add(pick(c));
     }
-
-    // 20. Punctuation & Typography
+    // Box Drawing & Borders
     {
-        SymbolCategory cat;
-        cat.name = "Punctuation & Typography";
-        cat.key  = "punc";
-        cat.col  = P20;
-        cat.symbols.Add(SymbolItem{"«", "Left Guillemet",  "punc"});
-        cat.symbols.Add(SymbolItem{"»", "Right Guillemet", "punc"});
-        cat.symbols.Add(SymbolItem{"—", "Em Dash",         "punc"});
-        cat.symbols.Add(SymbolItem{"–", "En Dash",         "punc"});
-        cat.symbols.Add(SymbolItem{"§", "Section Sign",    "punc"});
-        cat.symbols.Add(SymbolItem{"†", "Dagger",          "punc"});
-        cat.symbols.Add(SymbolItem{"©", "Copyright",       "punc"});
-        cat.symbols.Add(SymbolItem{"®", "Registered",      "punc"});
-        allCategories.Add(pick(cat));
+        SymbolCategory c; c.name="Box Drawing & Borders"; c.key="boxdraw"; 
+        c.symbols << SymbolItem{"─","Light Horizontal","boxdraw"} << SymbolItem{"│","Light Vertical","boxdraw"}
+                  << SymbolItem{"┌","Light Down & Right","boxdraw"} << SymbolItem{"┐","Light Down & Left","boxdraw"}
+                  << SymbolItem{"└","Light Up & Right","boxdraw"}   << SymbolItem{"┘","Light Up & Left","boxdraw"}
+                  << SymbolItem{"├","Light Vertical & Right","boxdraw"} << SymbolItem{"┤","Light Vertical & Left","boxdraw"}
+                  << SymbolItem{"┬","Light Down & Horizontal","boxdraw"} << SymbolItem{"┴","Light Up & Horizontal","boxdraw"}
+                  << SymbolItem{"┼","Light Vertical & Horizontal","boxdraw"}
+                  << SymbolItem{"═","Double Horizontal","boxdraw"}  << SymbolItem{"║","Double Vertical","boxdraw"}
+                  << SymbolItem{"╔","Double Down & Right","boxdraw"}<< SymbolItem{"╗","Double Down & Left","boxdraw"}
+                  << SymbolItem{"╚","Double Up & Right","boxdraw"}  << SymbolItem{"╝","Double Up & Left","boxdraw"}
+                  << SymbolItem{"╠","Double Vertical & Right","boxdraw"} << SymbolItem{"╣","Double Vertical & Left","boxdraw"}
+                  << SymbolItem{"╦","Double Down & Horizontal","boxdraw"} << SymbolItem{"╩","Double Up & Horizontal","boxdraw"}
+                  << SymbolItem{"╬","Double Vertical & Horizontal","boxdraw"};
+        allCategories.Add(pick(c));
+    }
+    // Block Elements & Shading
+    {
+        SymbolCategory c; c.name="Block Elements & Shading"; c.key="blocks";
+        c.symbols << SymbolItem{"░","Light Shade","blocks"} << SymbolItem{"▒","Medium Shade","blocks"}
+                  << SymbolItem{"▓","Dark Shade","blocks"}  << SymbolItem{"█","Full Block","blocks"}
+                  << SymbolItem{"▁","Lower One Eighth Block","blocks"} << SymbolItem{"▂","Lower One Quarter Block","blocks"}
+                  << SymbolItem{"▃","Lower Three Eighths","blocks"}    << SymbolItem{"▄","Lower Half Block","blocks"}
+                  << SymbolItem{"▅","Lower Five Eighths","blocks"}     << SymbolItem{"▆","Lower Three Quarters","blocks"}
+                  << SymbolItem{"▇","Lower Seven Eighths","blocks"}    << SymbolItem{"▉","Left Seven Eighths Block","blocks"}
+                  << SymbolItem{"▊","Left Three Quarters","blocks"}    << SymbolItem{"▋","Left Five Eighths","blocks"}
+                  << SymbolItem{"▌","Left Half Block","blocks"}        << SymbolItem{"▍","Left Three Eighths","blocks"};
+        allCategories.Add(pick(c));
+    }
+    // Enclosed Alphanumerics
+    {
+        SymbolCategory c; c.name="Enclosed Alphanumerics"; c.key="enclosed";
+        c.symbols << SymbolItem{"①","Circled Digit One","enclosed"} << SymbolItem{"②","Circled Digit Two","enclosed"}
+                  << SymbolItem{"③","Circled Digit Three","enclosed"} << SymbolItem{"④","Circled Digit Four","enclosed"}
+                  << SymbolItem{"⑤","Circled Digit Five","enclosed"}  << SymbolItem{"❶","Dingbat One","enclosed"}
+                  << SymbolItem{"❷","Dingbat Two","enclosed"}         << SymbolItem{"❸","Dingbat Three","enclosed"}
+                  << SymbolItem{"Ⓐ","Circled Capital A","enclosed"}   << SymbolItem{"Ⓑ","Circled Capital B","enclosed"}
+                  << SymbolItem{"Ⓒ","Circled Capital C","enclosed"}   << SymbolItem{"ⓐ","Circled Small a","enclosed"}
+                  << SymbolItem{"ⓑ","Circled Small b","enclosed"}     << SymbolItem{"ⓒ","Circled Small c","enclosed"}
+                  << SymbolItem{"ⓩ","Circled Small z","enclosed"}     << SymbolItem{"Ⓩ","Circled Capital Z","enclosed"};
+        allCategories.Add(pick(c));
+    }
+    // Superscripts & Subscripts
+    {
+        SymbolCategory c; c.name="Superscripts & Subscripts"; c.key="super";
+        c.symbols << SymbolItem{"¹","Superscript 1","super"} << SymbolItem{"²","Superscript 2","super"}
+                  << SymbolItem{"³","Superscript 3","super"} << SymbolItem{"⁴","Superscript 4","super"}
+                  << SymbolItem{"⁵","Superscript 5","super"} << SymbolItem{"⁶","Superscript 6","super"}
+                  << SymbolItem{"⁷","Superscript 7","super"} << SymbolItem{"⁸","Superscript 8","super"}
+                  << SymbolItem{"⁹","Superscript 9","super"} << SymbolItem{"⁰","Superscript 0","super"}
+                  << SymbolItem{"₀","Subscript 0","super"}   << SymbolItem{"₁","Subscript 1","super"}
+                  << SymbolItem{"₂","Subscript 2","super"}   << SymbolItem{"₃","Subscript 3","super"}
+                  << SymbolItem{"₄","Subscript 4","super"}   << SymbolItem{"₅","Subscript 5","super"}
+                  << SymbolItem{"₆","Subscript 6","super"}   << SymbolItem{"₇","Subscript 7","super"}
+                  << SymbolItem{"₈","Subscript 8","super"}   << SymbolItem{"₉","Subscript 9","super"};
+        allCategories.Add(pick(c));
     }
 }
 
-// ======================================================================
-// TitleDragButton — a draggable, paintable button
-//  - Payload: SYMBOL (big glyph + small title) or CATEGORY (centered name)
-//  - Modes:  SOURCE (starts Internal DnD) / BIN (click-to-remove)
-//  - Styling knobs: radius, line thickness, dashed frame, fill toggle,
-//                   normal/active face & inks, hover tint
-// ======================================================================
-class TitleDragButton : public Button {
+// ============================================================================
+// DragBadgeButton (compact, solid fill; per-state)
+// ============================================================================
+class DragBadgeButton : public Button {
 public:
-    typedef TitleDragButton CLASSNAME;
-    enum Mode    { SOURCE, BIN };
-    enum Payload { SYMBOL, CATEGORY };
+    typedef DragBadgeButton CLASSNAME;
+    enum Mode   { DRAGABLE, DROPPED, NORMAL };
+    enum Layout { ICON_CENTER_TEXT_BOTTOM, ICON_CENTER_TEXT_TOP, TEXT_CENTER, ICON_ONLY_CENTER };
+    enum { ST_NORMAL=0, ST_HOT=1, ST_PRESSED=2, ST_DISABLED=3, ST_COUNT=4 };
 
-    // ---------- lifecycle ----------
-    TitleDragButton() {
-        SetMinSize(Size(DPI(60), DPI(60)));
+    struct Palette { Color face[ST_COUNT], border[ST_COUNT], ink[ST_COUNT]; };
+    struct Payload { String flavor, id, group, name, text, badge; };
 
-        // Fonts / inks
-        glyphFont = StdFont().Bold().Height(DPI(18));
-        nameFont  = StdFont().Height(DPI(9));
-        catFont   = StdFont().Bold().Height(DPI(9));
-
-        glyphInk  = SColorText();
-        nameInk   = SColorText();
-        catInk    = SColorText();
-
-        // Defaults
-        face       = Blend(SColorPaper(), SColorFace(), 20);
-        border     = SColorShadow();
-        activeFace = Color(22, 86, 160);       // dark blue for "selected"
-        activeInk  = SColorHighlightText();    // typically white
-        activeBorder = SColorShadow();
-
-        radius        = DPI(4);
-        lineThickness = 1;
-        dashedFrame   = false;
-        dashPattern   = "5,5";
-        fillBody      = true;
-
-        hoverTintPct  = 30;   // how much SColorHighlight to blend on hover
+    DragBadgeButton() {
+        Transparent();
+        SetFrame(NullFrame());
+        SetMinSize(Size(DPI(60), DPI(24)));
+        SetFont( StdFont().Height(DPI(10)) );
+        SetBadgeFont ( StdFont().Height(DPI(17)) );
+        SetRadius(DPI(8)).SetStroke(1).EnableDashed(false).EnableFill(true);
+        SetHoverTintPercent(40);
+        SetSelected(false);
+        SetSelectionColors( Color(37, 99, 235), SColorHighlightText(), White());
+        SetLayout(TEXT_CENTER);
+        mode = NORMAL;
+        SetBaseColors(Blend(SColorPaper(), SColorFace(), 20), SColorShadow(), SColorText());
     }
 
-    // ---------- payload setters ----------
-    TitleDragButton& SetSymbol(const SymbolItem& s) { payload = SYMBOL; sym = s; Refresh(); return *this; }
-    const SymbolItem& GetSymbol() const { return sym; }
+    // payload & content
+    DragBadgeButton& SetPayload(const Payload& p) { payload = p; Refresh(); return *this; }
+    const Payload&   GetPayload() const           { return payload; }
+    DragBadgeButton& SetText(const String& t)     { label = t; Refresh(); return *this; }
+    DragBadgeButton& SetBadgeText(const String& b){ badgeText = b; Refresh(); return *this; }
+    DragBadgeButton& ClearBadge()                 { badgeText.Clear(); Refresh(); return *this; }
 
-    TitleDragButton& SetCategory(const SymbolCategory& c) {
-        payload = CATEGORY;
-        catKey  = c.key;
-        catName = c.name;
-        // For categories we like a pastel derived from the category color:
-        SetFace(Blend(SColorPaper(), c.col, 70));
+    // layout / fonts
+    DragBadgeButton& SetLayout(Layout l)          { layout = l; Refresh(); return *this; }
+    DragBadgeButton& SetFont(Font f)              { textFont = f; Refresh(); return *this; }
+    DragBadgeButton& SetBadgeFont(Font f)         { badgeFont = f; Refresh(); return *this; }
+    DragBadgeButton& SetHoverColor(Color c)       { hoverColor = c; return *this; }
+    
+    // modes / selection
+    DragBadgeButton& SetMode(Mode m)              { mode = m; Refresh(); return *this; }
+    DragBadgeButton& SetSelected(bool on=true)    { selected = on; Refresh(); return *this; }
+    bool             IsSelected() const           { return selected; }
+    DragBadgeButton& SetSelectionColors(Color faceC, Color borderC, Color inkC = SColorHighlightText())
+        { selFace=faceC; selBorder=borderC; selInk=inkC; return *this; }
+
+    // palette
+    DragBadgeButton& SetPalette(const Palette& p) { pal = p; Refresh(); return *this; }
+    Palette          GetPalette() const           { return pal; }
+    DragBadgeButton& SetBaseColors(Color face, Color border, Color ink, int hot_pct=12, int press_pct=14) {
+        pal.face[ST_NORMAL]   = face;
+        pal.face[ST_HOT]      = Blend(face, White(), hot_pct);
+        pal.face[ST_PRESSED]  = Blend(face, Black(), press_pct);
+        pal.face[ST_DISABLED] = Blend(SColorFace(), SColorPaper(), 60);
+
+        pal.border[ST_NORMAL]   = border;
+        pal.border[ST_HOT]      = Blend(border, SColorHighlight(), 20);
+        pal.border[ST_PRESSED]  = Blend(border, Black(), 15);
+        pal.border[ST_DISABLED] = Blend(border, SColorDisabled(), 35);
+
+        pal.ink[ST_NORMAL]   = ink;
+        pal.ink[ST_HOT]      = ink;
+        pal.ink[ST_PRESSED]  = ink;
+        pal.ink[ST_DISABLED] = SColorDisabled();
         Refresh();
         return *this;
     }
-    const String& GetCategoryKey() const { return catKey; }
 
-    TitleDragButton& SetMode(Mode m) { mode = m; Refresh(); return *this; }
+    // geometry
+    DragBadgeButton& SetRadius(int px){ radius = max(0,px); Refresh(); return *this; }
+    DragBadgeButton& SetStroke(int th){ stroke = max(0,th); Refresh(); return *this; }
+    DragBadgeButton& EnableDashed(bool on=true){ dashed=on; Refresh(); return *this; }
+    DragBadgeButton& SetDashPattern(const String& d){ dash=d; Refresh(); return *this; }
+    DragBadgeButton& EnableFill(bool on=true){ fill=on; Refresh(); return *this; }
+    DragBadgeButton& SetHoverTintPercent(int pct){ hoverPct=clamp(pct,0,100); return *this; }
+    DragBadgeButton& SetTileSize(Size s)       { SetMinSize(s); return *this; }
+    DragBadgeButton& SetTileSize(int w,int h)  { return SetTileSize(Size(w,h)); }
 
-    // ---------- styling knobs ----------
-    TitleDragButton& SetRadius(int px)                 { radius = max(DPI(2), px); Refresh(); return *this; }
-    TitleDragButton& SetLineThickness(int th)          { lineThickness = max(0, th); Refresh(); return *this; }
-    TitleDragButton& EnableDashedFrame(bool on = true) { dashedFrame = on; Refresh(); return *this; }
-    TitleDragButton& SetDashPattern(const String& d)   { dashPattern = d; Refresh(); return *this; }
-    TitleDragButton& EnableFill(bool on = true)        { fillBody = on; Refresh(); return *this; }
+    // signal used by bin tiles
+    Callback WhenRemove;
 
-    // Colors (normal)
-    TitleDragButton& SetFace(Color c)                  { face = c; Refresh(); return *this; }
-    TitleDragButton& SetBorder(Color c)                { border = c; Refresh(); return *this; }
-    TitleDragButton& SetTextInks(Color mainInk, Color subInk) { glyphInk = mainInk; nameInk = subInk; Refresh(); return *this; }
-
-    // Colors (active/selected)
-    TitleDragButton& SetActiveColors(Color faceC, Color borderC, Color textInk = SColorHighlightText()) {
-        activeFace = faceC; activeBorder = borderC; activeInk = textInk; Refresh(); return *this;
+    // DnD
+    void LeftDrag(Point, dword) override {
+        if(mode != DRAGABLE) return;
+        if(IsEmpty(payload.flavor)) return;
+        Image sample = MakeDragSample();
+        DoDragAndDrop(InternalClip(*this, payload.flavor), sample, DND_COPY);
+    }
+    void LeftDown(Point p, dword k) override {
+        if(mode == DROPPED && WhenRemove) WhenRemove();
+        Button::LeftDown(p, k);
     }
 
-    // Selection state (e.g. current category)
-    TitleDragButton& SetSelected(bool on = true) { selected = on; Refresh(); return *this; }
-    bool IsSelected() const { return selected; }
+    // paint
+    void Paint(Draw& w) override {
+        const int st = StateIndex();
+        Color faceC   = pal.face[st];
+        Color borderC = pal.border[st];
+        Color inkC    = pal.ink[st];
 
-    // Hover emphasis amount (0..100 = stronger)
-    TitleDragButton& SetHoverTintPct(int pct) { hoverTintPct = ::clamp(pct, 0, 100); Refresh(); return *this; }
+		if(HasMouse() && st==ST_HOT && !selected) {
+		    Color target = IsNull(hoverColor) ? White() : hoverColor; // default to simple lighten
+		    faceC = Blend(faceC, target, hoverPct);
+		}
 
-	// Chainable size helpers (wrap the void-returning SetMinSize)
-	TitleDragButton& SetTileSize(Size s)          { Button::SetMinSize(s); return *this; }
-	TitleDragButton& SetTileSize(int w, int h)    { return SetTileSize(Size(w, h)); }
+        if(selected) {
+            if(!IsNull(selFace))   faceC = selFace;
+            if(!IsNull(selBorder)) borderC = selBorder;
+            if(!IsNull(selInk))    inkC = selInk;
+        }
 
-    // ---------- DnD ----------
-    Image MakeDragSample() const {
         Size sz = GetSize();
-        if(sz.cx <= 0 || sz.cy <= 0) return Image();
         ImageBuffer ib(sz);
         Fill(~ib, RGBAZero(), ib.GetLength());
-        { BufferPainter p(ib); const_cast<TitleDragButton*>(this)->Paint(p); }
+        {
+            BufferPainter p(ib, MODE_ANTIALIASED);
+            const double inset = 0.5;
+            double x=inset, y=inset, wdt=sz.cx-2*inset, hgt=sz.cy-2*inset;
+
+            p.Begin();
+            if(radius>0) p.RoundedRectangle(x,y,wdt,hgt,radius);
+            else         p.Rectangle(x,y,wdt,hgt);
+            if(fill) {
+                p.Fill(faceC);
+            }
+            if(stroke>0) {
+                if(dashed) p.Dash(dash, 0.0);
+                p.Stroke(stroke, borderC);
+            }
+            p.End();
+        }
+        w.DrawImage(0,0,ib);
+
+        // content
+        Rect r = Rect(sz).Deflated(DPI(6), DPI(4));
+        const int pad = DPI(4);
+
+        if(layout == ICON_CENTER_TEXT_BOTTOM) {
+            bool hasBadge = !badgeText.IsEmpty();
+            if(!hasBadge) {
+                Size ts = GetTextSize(label, textFont);
+                w.DrawText(r.left + (r.GetWidth()-ts.cx)/2, r.top+(r.GetHeight()-ts.cy)/2, label, textFont, inkC);
+            } else {
+                Size gsz = GetTextSize(badgeText, badgeFont);
+                Size ts  = GetTextSize(label,     textFont);
+                int ty   = r.bottom - ts.cy;
+                int gx   = r.left + (r.GetWidth() - gsz.cx)/2;
+                int gy   = r.top + (r.GetHeight() - (gsz.cy + pad + ts.cy))/2;
+                w.DrawText(gx, gy, badgeText, badgeFont, inkC);
+                w.DrawText(r.left + (r.GetWidth()-ts.cx)/2, ty, label, textFont, inkC);
+            }
+        }
+        else if(layout == ICON_CENTER_TEXT_TOP) {
+            bool hasBadge = !badgeText.IsEmpty();
+            Size ts = GetTextSize(label, textFont);
+            int tx = r.left + (r.GetWidth()-ts.cx)/2;
+            int ty = r.top;
+            w.DrawText(tx, ty, label, textFont, inkC);
+            if(hasBadge) {
+                Size gsz = GetTextSize(badgeText, badgeFont);
+                int gx   = r.left + (r.GetWidth()-gsz.cx)/2;
+                int gy   = r.top + (r.GetHeight() - gsz.cy) / 2;
+                w.DrawText(gx, gy, badgeText, badgeFont, inkC);
+            }
+        }
+        else if(layout == TEXT_CENTER) {
+            Size ts = GetTextSize(label, textFont);
+            w.DrawText(r.left + (r.GetWidth()-ts.cx)/2, r.top+(r.GetHeight()-ts.cy)/2, label, textFont, inkC);
+        }
+        else { // ICON_ONLY_CENTER
+            Size gsz = GetTextSize(badgeText, badgeFont);
+            w.DrawText(r.left + (r.GetWidth()-gsz.cx)/2, r.top+(r.GetHeight()-gsz.cy)/2, badgeText, badgeFont, inkC);
+        }
+    }
+
+private:
+    int StateIndex() const {
+        if(!IsShowEnabled())         return ST_DISABLED;
+        if(IsPush() || HasCapture()) return ST_PRESSED;
+        return HasMouse() ? ST_HOT : ST_NORMAL;
+    }
+
+    Image MakeDragSample() const {
+        Size sz = GetSize();
+        if(sz.cx<=0 || sz.cy<=0) return Image();
+        ImageBuffer ib(sz);
+        Fill(~ib, RGBAZero(), ib.GetLength());
+        { BufferPainter p(ib); const_cast<DragBadgeButton*>(this)->Paint(p); }
         return Image(ib);
     }
 
-    virtual void LeftDrag(Point, dword) override {
-        if(mode != SOURCE) return;
-        if(payload == SYMBOL)
-            DoDragAndDrop(InternalClip(*this, "symbol"),   MakeDragSample(), DND_COPY);
-        else
-            DoDragAndDrop(InternalClip(*this, "category"), MakeDragSample(), DND_COPY);
+    // payload/content/look
+    Payload    payload;
+    String     label, badgeText;
+    Layout     layout = TEXT_CENTER;
+    Palette    pal;
+    Font       textFont, badgeFont;
+    int        radius = DPI(8), stroke = 1;
+    bool       dashed = false, fill = true;
+    String     dash   = "5,5";
+    int        hoverPct = 22;
+    bool       selected = false;
+    Color      selFace=Null, selBorder=Null, selInk=Null;
+    Mode       mode = NORMAL;
+    Color      hoverColor = Null;
+};
+
+// ============================================================================
+// Styled DropList (rounded background; self-painted text & arrow)
+// ============================================================================
+struct DropListStyled : DropList {
+    // look
+    int   radius = DPI(8);
+    Color face_normal   = Color(36, 99, 235);
+    Color face_hot      = Blend( Color(36, 99, 235), White(), 15);
+    Color face_pressed  = Blend( Color(37, 99, 235), Black(), 100);
+    Color face_disabled = Blend(SColorFace(), SColorPaper(), 60);
+    Color ink_normal    = White();
+    Color ink_disabled  = GrayColor(180);
+    Color border_color  = SColorShadow();
+
+    // geometry / stroke (button-like)
+    int    stroke  = 0;
+    bool   dashed  = false;
+    String dash    = "5,5";
+    bool   fill    = true;
+
+    // key -> label map so we can show human text while storing an int key
+    VectorMap<Value, String> key_to_label;
+
+    DropListStyled() {
+        Transparent();
+        SetFrame(NullFrame());
+        SetDropLines(16);
+        // Do NOT "using DropList::Add" (we want to hide the base overload)
     }
 
-	virtual void LeftDown(Point p, dword k) override {
-	    if(mode == BIN) {
-	        if(WhenRemove)
-	            PostCallback(WhenRemove);   // defer to end of event loop
-	        return;                          // do NOT call Button::LeftDown
-	    }
-	    Button::LeftDown(p, k);
-	}
+    // ---- API parity with our buttons ----
+    DropListStyled& SetBgColor(Color base, int hot_pct=15, int press_pct=20) {
+        face_normal   = base;
+        face_hot      = Blend(base, White(), hot_pct);
+        face_pressed  = Blend(base, Black(), press_pct);
+        face_disabled = Blend(SColorFace(), SColorPaper(), 60);
+        Refresh();
+        return *this;
+    }
+    DropListStyled& SetTextColor(Color ink, Color dis = GrayColor(180)) {
+        ink_normal = ink; ink_disabled = dis; Refresh(); return *this;
+    }
+    DropListStyled& SetBorderColor(Color c) { border_color = c; Refresh(); return *this; }
+    DropListStyled& SetRadius(int px)       { radius = max(0,px); Refresh(); return *this; }
+    DropListStyled& SetStroke(int th)       { stroke = max(0, th); Refresh(); return *this; }
+    DropListStyled& EnableDashed(bool on=true) { dashed = on; Refresh(); return *this; }
+    DropListStyled& SetDashPattern(const String& d) { dash = d; Refresh(); return *this; }
+    DropListStyled& EnableFill(bool on=true) { fill = on; Refresh(); return *this; }
+    DropListStyled& SetTileSize(Size s)      { SetMinSize(s); return *this; }
+    DropListStyled& SetTileSize(int w,int h) { return SetTileSize(Size(w,h)); }
 
-    // ---------- paint ----------
-    virtual void Paint(Draw& w) override {
-        // Compute current face/border/ink according to state
-        bool over  = HasMouse();
+    // HIDE base overload by providing the same signature (3 args)
+    DropListStyled& Add(const Value& key, const Value& label, bool enable = true) {
+        key_to_label.GetAdd(key) = AsString(label);
+        DropList::Add(key, label, enable);   // forward to base
+        return *this;
+    }
 
-        Color curFace   = selected ? activeFace : face;
-        Color curBorder = selected ? activeBorder : border;
-        Color curGlyph  = selected ? activeInk  : glyphInk;
-        Color curName   = selected ? activeInk  : nameInk;
-        Color curCat    = selected ? activeInk  : catInk;
+    void Paint(Draw& w) override {
+        Size sz = GetSize();
 
-        if(over && !selected) {
-            curFace = Blend(curFace, SColorHighlight(), hoverTintPct);
-        }
+        // background color by state
+        const int st = VisualState();
+        Color bg  = (st == CTRL_DISABLED) ? face_disabled
+                 : (st == CTRL_PRESSED)  ? face_pressed
+                 : (st == CTRL_HOT)      ? face_hot
+                                          : face_normal;
+        Color ink = (st == CTRL_DISABLED) ? ink_disabled : ink_normal;
 
-        const Size sz = GetSize();
-        const int  x = 0, y = 0, wdt = sz.cx, hgt = sz.cy;
-        const int  r  = radius;
-        const int  bw = lineThickness;
-
-        // Draw body + optional frame with Painter for crisp corners
+        ImageBuffer ib(sz);
+        ib.SetKind(IMAGE_ALPHA);
+        Fill(~ib, RGBAZero(), ib.GetLength());
         {
-            ImageBuffer ib(sz);
-            Fill(~ib, RGBAZero(), ib.GetLength());
-            BufferPainter p(ib);
+            BufferPainter p(ib, MODE_ANTIALIASED);
+            const double inset = 0.5;
+            const double x = inset, y = inset;
+            const double wdt = sz.cx - 2*inset;
+            const double hgt = sz.cy - 2*inset;
+            const int r = min(radius, min(sz.cx, sz.cy) / 2);
 
             p.Begin();
-            if(fillBody) {
-                (r ? p.RoundedRectangle(x + 0.5, y + 0.5, wdt - 1.0, hgt - 1.0, r)
-                   : p.Rectangle(x + 0.5, y + 0.5, wdt - 1.0, hgt - 1.0));
-                p.Fill(curFace);
-            }
-            if(bw > 0) {
-                (r ? p.RoundedRectangle(x + 0.5, y + 0.5, wdt - 1.0, hgt - 1.0, r)
-                   : p.Rectangle(x + 0.5, y + 0.5, wdt - 1.0, hgt - 1.0));
-                if(dashedFrame) p.Dash(dashPattern, 0.0);
-                p.Stroke(bw, curBorder);
+            p.RoundedRectangle(x, y, wdt, hgt, r);
+            if(fill) p.Fill(bg);
+            if(stroke > 0) {
+                if(dashed) p.Dash(dash, 0.0);
+                p.Stroke(stroke, border_color);
             }
             p.End();
-
-            w.DrawImage(0, 0, ib);
         }
+        w.DrawImage(0, 0, ib);
 
-        // Inner content area
-        Rect rct = Rect(sz).Deflated(DPI(6), DPI(4));
+        // label text for the current key
+        Value key = Get(); // current selected key
+        String text = key_to_label.Get(key, AsString(key));
+        Font f = StdFont().Height(DPI(11));
+        Size ts = GetTextSize(text, f);
 
-        if(payload == SYMBOL) {
-            // big glyph + small name centered
-            Size gsz = GetTextSize(sym.charCode, glyphFont);
-            Size nsz = GetTextSize(sym.name,     nameFont);
-            int total_h = gsz.cy + DPI(4) + nsz.cy;
-            int y0 = rct.top + (rct.GetHeight() - total_h)/2;
+        const int padL = DPI(8);
+        const int padR = DPI(8);
 
-            int gx = rct.left + (rct.GetWidth() - gsz.cx)/2;
-            w.DrawText(gx, y0, sym.charCode, glyphFont, curGlyph);
+        // chevron
+        Image arrow = CtrlImg::SortDown();
+        const int aw = DPI(12), ah = DPI(12);
+        int ax = sz.cx - padR - aw;
+        int ay = (sz.cy - ah) / 2;
 
-            int nx = rct.left + (rct.GetWidth() - nsz.cx)/2;
-            w.DrawText(nx, y0 + gsz.cy + DPI(4), sym.name, nameFont, curName);
-        }
-        else {
-            // centered category name
-            Size ts = GetTextSize(catName, catFont);
-            int x0 = rct.left + (rct.GetWidth() - ts.cx)/2;
-            int y0 = rct.top  + (rct.GetHeight() - ts.cy)/2;
-            w.DrawText(x0, y0, catName, catFont, curCat);
-        }
+        // clip text so it doesn't run under the arrow
+        Rect tr = RectC(padL, 0, ax - padL - DPI(4), sz.cy);
+        w.Clip(tr);
+        w.DrawText(padL, (sz.cy - ts.cy)/2, text, f, ink);
+        w.End(); // end clip
+
+        w.DrawImage(ax, ay, aw, ah, arrow);
     }
 
-    // ---------- signals ----------
-    Callback WhenRemove;
-
 private:
-    // payload
-    Payload   payload = SYMBOL;
-    SymbolItem sym;
-    String     catKey, catName;
-
-    // mode/state
-    Mode   mode     = SOURCE;
-    bool   selected = false;
-
-    // look
-    Font   glyphFont, nameFont, catFont;
-    Color  glyphInk,  nameInk,  catInk;
-
-    // body/frame
-    int     radius        = 0;
-    int     lineThickness = 1;
-    bool    dashedFrame   = false;
-    String  dashPattern   = "5,5";
-    bool    fillBody      = true;
-
-    // colors
-    Color face, border;
-    Color activeFace, activeBorder, activeInk;
-
-    int   hoverTintPct = 30; // 0..100 blend amount
+    int VisualState() const {
+        if(!IsShowEnabled()) return CTRL_DISABLED;
+        if(IsPopUp())        return CTRL_PRESSED;
+        return HasMouse() ? CTRL_HOT : CTRL_NORMAL;
+    }
 };
 
 
-// ======================================================================
-// DropBinCard — StageCard subclass; whole card is a drop target
-//  - Accepts both "symbol" and "category" drags
-// ======================================================================
+// ============================================================================
+// Helpers to mount data onto DragBadgeButton
+// ============================================================================
+static inline DragBadgeButton& SetupSymbolTile(DragBadgeButton& b, const SymbolItem& s) {
+    DragBadgeButton::Payload p;
+    p.flavor="symbol"; p.id=s.charCode; p.group=s.categoryKey; p.name=s.name; p.text=s.name; p.badge=s.charCode;
+    return b.SetText(s.name).SetBadgeText(s.charCode)
+            .SetLayout(DragBadgeButton::ICON_CENTER_TEXT_BOTTOM)
+            .SetPayload(p);
+}
+
+static inline DragBadgeButton& SetupCategoryChip(DragBadgeButton& b, const SymbolCategory& c) {
+    DragBadgeButton::Payload p;
+    p.flavor="category"; p.id=c.key; p.group=c.key; p.name=c.name; p.text=c.name;
+    return b.SetText(c.name).ClearBadge()
+            .SetLayout(DragBadgeButton::TEXT_CENTER)
+            .SetPayload(p);
+}
+
+static inline DragBadgeButton& SetupPillButton(DragBadgeButton& b, const String& label) {
+    DragBadgeButton::Payload p; p.text = label;
+    return b.SetText(label).ClearBadge()
+            .SetLayout(DragBadgeButton::TEXT_CENTER)
+            .SetPayload(p);
+}
+
+// ============================================================================
+// DropBinCard — StageCard subclass; content-only rounded, dashed on drop
+// ============================================================================
 class DropBinCard : public StageCard {
 public:
     typedef DropBinCard CLASSNAME;
@@ -621,451 +773,399 @@ public:
     Callback1<const SymbolItem&> WhenAdded;
     Callback1<const SymbolItem&> WhenRemoved;
     Callback                     WhenListChanged;
-    int index = -1; // optional container index (BIN uses it for remove)
-    
+
+    Size tileSizes = Size(70, 50);
+
     DropBinCard() {
         SetTitle("Selection Bin (Drag & Drop Here)")
             .SetHeaderAlign(StageCard::LEFT)
+            .EnableHeaderFill(false)
             .EnableCardFill(false)
             .EnableCardFrame(false)
             .EnableContentFill(true)
             .EnableContentFrame(true)
-            .EnableContentDashed(true)
-            .SetContentCornerRadius(6)
-            .SetContentStrokeThickness(2)
-            .SetCardColors(Color(245,245,245), SColorShadow())
-            .SetContentFrameColors(SColorPaper(), GrayColor(160));
-        baseContentFill   = SColorPaper();
-        baseContentStroke = GrayColor(160);
+            .EnableContentDash(true)
+            .SetContentCornerRadius(DPI(10))
+            .SetContentFrameThickness(2);
 
-        ContentWrap();
-        EnableContentScroll(true);
-        EnableContentClampToPane(true);
+        StackH(); SetWrap(); EnableContentScroll(true); EnableContentClampToPane(true);
         SetContentInset(DPI(8), DPI(8), DPI(8), DPI(8));
         SetContentGap(DPI(4), DPI(4));
-        WrapItemSize(tileSize);
-        SetMinContent(Size(0, DPI(72)));
     }
 
-    // ----------------------- Knobs -----------------------
-    DropBinCard& SetTileSize(Size s)        { tileSize = s; WrapItemSize(s); Reflow(); return *this; }
-    DropBinCard& SetTileSize(int w,int h)   { tileSize = Size(w,h); WrapItemSize(w,h); Reflow(); return *this; }
-    DropBinCard& SetTileGap(int g)          { SetContentGap(g, g); Reflow(); return *this; }
-    DropBinCard& SetTileGap(int gx,int gy)  { SetContentGap(gx, gy); Reflow(); return *this; }
-    DropBinCard& SetContentInsets(int l,int t,int r,int b) { SetContentInset(l,t,r,b); Reflow(); return *this; }
-    DropBinCard& HighlightOnDrop(bool on)   { highlightOnDrop = on; return *this; }
+    DropBinCard& SetTileSize(Size s)      { tileSizes = s;  Reflow(); return *this; }
+    DropBinCard& SetTileSize(int w,int h) { tileSizes = Size(w,h); Reflow(); return *this; }
 
-    // ------------------------ API ------------------------
     const Vector<SymbolItem>& GetSymbols() const { return items; }
 
     void AddSymbolUnique(const SymbolItem& s) {
-        for(const auto& x : items)
-            if(x.charCode == s.charCode)
-                return;
+        for(const auto& x : items) if(x.charCode == s.charCode) return;
         items.Add(s);
         if(WhenAdded) WhenAdded(s);
-        RebuildTiles();
-        FireListChanged();
+        RebuildTiles(); FireListChanged();
     }
-
     void RemoveIndex(int i) {
         if(i < 0 || i >= items.GetCount()) return;
         SymbolItem removed = items[i];
         items.Remove(i);
         if(WhenRemoved) WhenRemoved(removed);
-        RebuildTiles();
-        FireListChanged();
+        RebuildTiles(); FireListChanged();
     }
+    void ClearAll() { items.Clear(); RebuildTiles(); FireListChanged(); }
 
-    void ClearAll() {
-        items.Clear();
-        RebuildTiles();
-        FireListChanged();
-    }
-
-    // ------------------ DnD (whole card) ------------------
-    virtual void DragAndDrop(Point, PasteClip& d) override {
-        bool ok_symbol   = AcceptInternal<TitleDragButton>(d, "symbol");
-        bool ok_category = AcceptInternal<TitleDragButton>(d, "category");
-        bool ok = ok_symbol || ok_category;
-
-        if(ok && highlightOnDrop) {
-            SetContentFrameColors(baseContentFill, SColorHighlight());
-            Refresh();
-        }
-
-        if(!ok) return;
+    void DragAndDrop(Point, PasteClip& d) override {
+        const bool ok_symbol   = AcceptInternal<DragBadgeButton>(d, "symbol");
+        const bool ok_category = AcceptInternal<DragBadgeButton>(d, "category");
+        if(!(ok_symbol || ok_category)) return;
 
         d.SetAction(DND_COPY);
         d.Accept();
-
         if(!d.IsPaste()) return;
 
-        const TitleDragButton& src = GetInternal<TitleDragButton>(d);
+        const DragBadgeButton& src = GetInternal<DragBadgeButton>(d);
+        const auto& P = src.GetPayload();
+
         if(ok_symbol) {
-            AddSymbolUnique(src.GetSymbol());
+            SymbolItem s; s.charCode=P.badge; s.name=IsEmpty(P.name) ? P.text : P.name; s.categoryKey=P.group;
+            AddSymbolUnique(s);
         } else {
-            // category drop: add all items of that category
-            const String key = src.GetCategoryKey();
             for(const auto& cat : allCategories)
-                if(cat.key == key)
-                    for(const auto& it : cat.symbols)
-                        AddSymbolUnique(it);
+                if(cat.key == P.group)
+                    for(const auto& it : cat.symbols) AddSymbolUnique(it);
         }
     }
 
-    virtual void DragLeave() override {
-        if(highlightOnDrop) {
-            SetContentFrameColors(baseContentFill, baseContentStroke);
-            Refresh();
-        }
-    }
-
-    virtual void Paint(Draw& w) override {
+    void Paint(Draw& w) override {
         StageCard::Paint(w);
         if(items.IsEmpty()) {
             Size sz = GetSize();
             String t = "Drag symbols or a whole category here. Click a tile to remove.";
             Font f = StdFont().Italic().Height(DPI(10));
             Size ts = GetTextSize(t, f);
-            int tx = (sz.cx - ts.cx) / 2;
-            int ty = (sz.cy - ts.cy) / 2;
-            w.DrawText(tx, ty, t, f, SColorDisabled());
+            w.DrawText((sz.cx - ts.cx)/2, (sz.cy - ts.cy)/2, t, f, SColorDisabled());
         }
     }
 
 private:
-    Vector<SymbolItem>       items;
-    Array<TitleDragButton>   tiles;
-
-    Color  baseContentFill, baseContentStroke;
-    bool   highlightOnDrop = true;
-
-    Size   tileSize = Size(DPI(60), DPI(60));
-
-	void RebuildTiles() {
-	    // Remove previous tile ctrls from UI
-	    for (int i = 0; i < tiles.GetCount(); ++i)
-	        tiles[i].Remove();
-	    tiles.Clear();
-	
-	    // Recreate BIN tiles from current items
-	    for (int i = 0; i < items.GetCount(); ++i) {
-	        TitleDragButton& t = tiles.Create();
-	        t.SetSymbol(items[i])
-	         .SetMode(TitleDragButton::BIN);
-	
-	        t.SetMinSize(tileSize);      //silly this is not chainable
-	
-	        // Optional: subtle bin styling (thin line, rounded)
-	        t.SetRadius(DPI(5))
-	         .SetLineThickness(1)
-	         .EnableDashedFrame(false)
-	         .EnableFill(true);
-	
-	        // Click in BIN removes the tile
-	        t.WhenRemove = THISBACK1(RemoveIndex, i);
-	
-	        AddContent(t);                       // WRAP layout will position it
-	    }
-	
-	    Layout();   // recompute flow + scrollbar
-	    Refresh();
-	}
-
-
-    void Reflow() {
-        WrapItemSize(tileSize);
-        for(int i = 0; i < tiles.GetCount(); ++i)
-            tiles[i].SetMinSize(tileSize);
-        Layout();
-        Refresh();
-    }
+    Vector<SymbolItem>        items;
+    Array<DragBadgeButton>    tiles;
 
     void FireListChanged() { if(WhenListChanged) WhenListChanged(); }
+
+    void RebuildTiles() {
+        for (int i = 0; i < tiles.GetCount(); ++i) tiles[i].Remove();
+        tiles.Clear();
+
+        for (int i = 0; i < items.GetCount(); ++i) {
+            DragBadgeButton& t = tiles.Create();
+            SetupSymbolTile(t, items[i])
+                .SetMode(DragBadgeButton::DROPPED)
+                .SetRadius(DPI(5))
+                .SetStroke(1)
+                .EnableDashed(false)
+                .EnableFill(true);
+            t.WhenRemove = THISBACK1(RemoveIndex, i);
+            AddFixed(t, tileSizes.cx, tileSizes.cy);
+        }
+        Layout(); Refresh();
+    }
+
+    void Reflow() {
+        for(int i = 0; i < tiles.GetCount(); ++i) tiles[i].SetMinSize(tileSizes);
+        Layout(); Refresh();
+    }
 };
 
-
-/* ======================================================================
-   SymbolPickerApp — main window
-   ====================================================================== */
-
+// ============================================================================
+// Main app
+// ============================================================================
 class SymbolPickerApp : public TopWindow {
 public:
     typedef SymbolPickerApp CLASSNAME;
 
-    // Header + controls
-    StageCard   headerCard;
-    Button         copyBtn, exitBtn;
+    // Cards
+    StageCard      headerCard;
+    StageCard      categoryCard;
+    StageCard      itemsCard;
+    DropBinCard    binCard;
+    StageCard      codeCard;
 
-    // Category bar (now uses TitleDragButton tiles)
-    StageCard           categoryCard;
-    Array<TitleDragButton> categoryButtons;
+    // Header controls
+    DragBadgeButton btnExit,btnCopy;
 
-    // Splitters
-    Splitter       mainSplitter;  // Left (items+bin) | Right (code)
-    Splitter       leftSplit;     // Top (items) | Bottom (bin)
+    // Theme selector
+    DropListStyled styleDrop;
 
-    // Left-top items card (wrap layout of draggable tiles)
-    StageCard             itemsCard;
-    Array<TitleDragButton>   symbolTiles;
+    // Left/Right split
+    Splitter       mainSplitter;
+    Splitter       leftSplit;
 
-    // Left-bottom bin card
-    DropBinCard              binCard;
-
-    // Right code pane
-    StageCard   codeCard;
-    Option         hexMode;       // toggle format
+    // Content controls
+    Array<DragBadgeButton> symbolTiles;
+    Array<DragBadgeButton> categoryButtons;
     DocEdit        codeOutput;
+    Option         hexMode;
 
-    // Data/state
+    // State
+    int            theme_id = 1; // Midnight default
     String         activeCategoryKey;
+    Color          appBg     = SColorPaper();
+    Size           tileSizes = Size(70, 50);
 
-    // ctor + behavior
-    SymbolPickerApp();
+    // small layout cursor for header row
+    int colStart = DPI(8), colPad = DPI(4), colX = DPI(0);
+    int ColPos(int width, bool reset=false) { if(reset) colX=colStart; int cur=colX; colX += DPI(width) + colPad; return cur; }
 
-    void FilterCategory(const String& key);
-    void UpdateSymbolGrid();
-    void UpdateCodeOutput();
-    void AddSymbolToBin(const SymbolItem& item);
-    void CopyToClipboard();
-};
+    SymbolPickerApp() {
+        Title("U++ Symbol Picker");
+        Sizeable().Zoomable();
+        SetMinSize(Size(DPI(800), DPI(500)));
+        SetRect(Size(DPI(1200), DPI(800)));
 
+        InitData();
+        activeCategoryKey = allCategories.IsEmpty() ? String() : allCategories[0].key;
 
-void SymbolPickerApp::FilterCategory(const String& key) {
-    activeCategoryKey = key;
+        // Header card (no fill; text only)
+        headerCard
+            .SetTitle("U++ Symbol Picker")
+            .SetSubTitle("Filter by category, then drag symbols or an entire category into the Selection Bin. Export/Generate U++ code.")
+            .SetHeaderAlign(StageCard::LEFT)
+            .SetHeaderGap(DPI(6))
+            .SetHeaderInset(0, DPI(8), 0, 0)
+            .EnableCardFrame(false).EnableCardFill(false).EnableHeaderFill(false);
+        Add(headerCard.HSizePos(DPI(8), DPI(8)).TopPos(DPI(8), DPI(60)));
 
-    for (int i = 0; i < categoryButtons.GetCount(); ++i) {
-        bool isActive = (allCategories[i].key == key);
-        categoryButtons[i].SetSelected(isActive);
-    }
+        // Header buttons
+        btnExit.SetText("Exit").SetRadius(DPI(10)).SetStroke(0).EnableFill(true).SetTileSize(90, 28);
+        btnExit.WhenAction = [=]{ Close(); };
 
-    for (const auto& cat : allCategories)
-        if(cat.key == key) { itemsCard.SetTitle(cat.name); break; }
+        btnCopy.SetText("Copy").SetRadius(DPI(10)).SetStroke(0).EnableFill(true).SetTileSize(90, 28);
+        btnCopy.WhenAction = THISBACK(CopyToClipboard);
+       
+        Add(btnExit.RightPos(ColPos(80, true),  DPI(80)).TopPos(DPI(16), DPI(28)));
+        Add(btnCopy.RightPos(ColPos(100),       DPI(80)).TopPos(DPI(16), DPI(28)));
 
-    UpdateSymbolGrid();
-}
+        // DropListStyled for theme
+        styleDrop.Add(0, "Light");
+        styleDrop.Add(1, "Midnight");
+        styleDrop.SetRadius(DPI(10)).SetStroke(0);
+        styleDrop <<= theme_id;
+        styleDrop.WhenAction = [=]{ ApplyStyleId((int)~styleDrop); };
+        Add(styleDrop.RightPos(ColPos(100), DPI(100)).TopPos(DPI(15), DPI(28)));
 
-void SymbolPickerApp::UpdateSymbolGrid() {
-    for (int i = 0; i < symbolTiles.GetCount(); ++i)
-        symbolTiles[i].Remove();
-    symbolTiles.Clear();
+        // Category bar
+        categoryCard.EnableHeaderFill(false).EnableCardFill(false).EnableCardFrame(false)
+                    .EnableContentFill(false).EnableContentFrame(false)
+                    .EnableContentClampToPane(true).EnableContentScroll(true)
+                    .StackH().SetWrap()
+                    .SetContentInset(DPI(4), DPI(4), DPI(4), DPI(4))
+                    .SetContentGap(DPI(6), DPI(6));
+        Add(categoryCard.HSizePos(DPI(8), DPI(8)).TopPos(DPI(72), DPI(130)));
 
-    const SymbolCategory* activeCat = nullptr;
-    for (const auto& cat : allCategories)
-        if (cat.key == activeCategoryKey) { activeCat = &cat; break; }
-    if (!activeCat) return;
+        for (int i = 0; i < allCategories.GetCount(); ++i) {
+            const auto& cat = allCategories[i];
+            DragBadgeButton& b = categoryButtons.Create();
+            SetupCategoryChip(b, cat)
+                .SetMode(DragBadgeButton::DRAGABLE)
+                .SetTileSize(Size(150, 25))
+                .SetRadius(DPI(10))
+                .SetStroke(0)
+                .EnableDashed(false)
+                .EnableFill(true)
+                .SetHoverTintPercent(22)
 
-    const Size tileSz = Size(DPI(60), DPI(60));
-
-    for (int i = 0; i < activeCat->symbols.GetCount(); ++i) {
-        const auto& item = activeCat->symbols[i];
-        TitleDragButton& tile = symbolTiles.Create();
-        tile.SetSymbol(item).SetMode(TitleDragButton::SOURCE);
-        tile.SetMinSize(tileSz);
-        tile.SetStyle(Button::StyleNormal());
-
-        itemsCard.AddContent(tile);
-    }
-
-    itemsCard.Layout();
-}
-
-
-static dword FirstCodepoint(const String& utf8) {
-    if(utf8.IsEmpty()) return 0;
-    WString ws = ToUnicode(utf8, CHARSET_UTF8);
-    return ws.IsEmpty() ? 0 : (dword)ws[0];
-}
-
-void SymbolPickerApp::UpdateCodeOutput() {
-    String out;
-    out << "// Unicode Picker Selections v0.9\n\n";
-
-    const Vector<SymbolItem>& selected = binCard.GetSymbols();
-
-    if (selected.IsEmpty()) {
-        out << "// Drag a symbol or a whole category into the Selection Bin...\n";
-        codeOutput.Set(out.ToWString());
-        return;
-    }
-
-    VectorMap<String, Vector<SymbolItem>> grouped;
-    for (const auto& item : selected) {
-        String fullCategory;
-        for (const auto& cat : allCategories)
-            if (cat.key == item.categoryKey) { fullCategory = cat.name; break; }
-        grouped.GetAdd(fullCategory).Add(item);
-    }
-
-    Vector<String> keys;
-    for(int i = 0; i < grouped.GetCount(); i++)
-        keys.Add(grouped.GetKey(i));
-    Sort(keys);
-
-    bool useHex = (bool)hexMode;
-
-    for(const String& catName : keys) {
-        out << "// " << catName << "\n";
-        for (const auto& item : grouped.Get(catName)) {
-            if(useHex) {
-                dword cp = FirstCodepoint(item.charCode);
-                out << Format("myControl.SetLabel(FromUtf32(0x%X)); // %s\n", (int)cp, ~item.name);
-            } else {
-                out << Format("myControl.SetLabel(\"%s\"); // %s\n", ~item.charCode, ~item.name);
-            }
+                .WhenAction = THISBACK1(FilterCategory, cat.key);
+            categoryCard.AddFixed(b, 150, 25);
         }
-        out << "\n";
-    }
-    codeOutput.Set(out.ToWString());
-}
 
-void SymbolPickerApp::AddSymbolToBin(const SymbolItem& item) {
-    binCard.AddSymbolUnique(item);
-    UpdateCodeOutput();
-}
+        // Items card
+        itemsCard.SetTitle("Items").SetHeaderAlign(StageCard::LEFT)
+                .EnableHeaderFill(false).EnableCardFill(false).EnableCardFrame(false)
+                .EnableContentFill(true).EnableContentFrame(false)
+                .SetContentCornerRadius(DPI(10)).SetContentFrameThickness(0)
+                .EnableContentScroll(true).EnableContentClampToPane(true)
+                .StackH().SetWrap()
+                .SetContentInset(DPI(6), DPI(6), DPI(6), DPI(6))
+                .SetContentGap(DPI(6), DPI(6));
 
-void SymbolPickerApp::CopyToClipboard() {
-    WriteClipboardText(codeOutput.Get()); // DocEdit::Get returns WString
-}
+        // Bin card (dashed frame enabled inside ApplyStyleId via a clone style)
+        binCard.SetTileSize(tileSizes).WhenListChanged = THISBACK(UpdateCodeOutput);
 
-// =====================================================
-// App impl
-// =====================================================
-SymbolPickerApp::SymbolPickerApp()
-{
-    Title("Unicode Symbol Picker (U++ Badge Generator)");
-    Sizeable().Zoomable();
-    SetMinSize(Size(DPI(800), DPI(500)));
-    SetRect( Size(DPI(1000), DPI(700)));  //window size
-    
-    // --- Data ---
-    InitData();
-    activeCategoryKey = allCategories.IsEmpty() ? String() : allCategories[0].key;
+        // Code card
+        codeCard.SetTitle("U++ Code Output").SetHeaderAlign(StageCard::LEFT)
+                .EnableHeaderFill(true).EnableCardFill(false).EnableCardFrame(false)
+                .EnableContentFill(true).EnableContentFrame(false)
+                .SetContentCornerRadius(DPI(10)).SetContentFrameThickness(0)
+                .SetContentInset(DPI(6), DPI(6), DPI(6), DPI(6))
+                .EnableContentScroll(false);
 
-    // --- Top header strip ---
-    headerCard
-        .SetTitle("Unicode Symbol References for U++")
-        .SetSubTitle("Filter by category, then drag symbols or an entire category into the Selection Bin to generate U++ code")
-        .SetHeaderAlign(StageCard::LEFT)
-        .EnableCardFrame(false)                // no outer frame
-        .EnableCardFill(false)                 // let window bg show
-        .SetCardColors(Color(245,245,245), SColorShadow());
-    this->Add(headerCard.HSizePos(DPI(8), DPI(8)).TopPos(DPI(8), DPI(56)));
+        codeOutput.SetReadOnly();
+        codeOutput.Transparent();
+        codeOutput.SetFrame(NullFrame());
+        codeOutput.SetFont(Monospace(10));
+        codeOutput.SetColor(DocEdit::INK_NORMAL,   Color(170,255,170));
+        codeOutput.SetColor(DocEdit::PAPER_NORMAL, Null);
+        codeOutput.SetColor(DocEdit::PAPER_READONLY, Null);
+        codeOutput.SetColor(DocEdit::PAPER_SELECTED, Blend(Color(32,36,42), SColorHighlight(), 50));
+        codeCard.ReplaceExpand(codeOutput);
+        codeOutput.HSizePos(0, 0).VSizePos(0, 0);
 
-    // Header actions
-    copyBtn.SetLabel("Copy to Clipboard");
-    copyBtn.WhenAction = THISBACK(CopyToClipboard);
-    Add(copyBtn.RightPos(DPI(120), DPI(110)).TopPos(DPI(16), DPI(28)));
+        // Splitters
+        leftSplit.Vert(itemsCard, binCard).SetPos(7000);
+        mainSplitter.Horz(leftSplit, codeCard).SetPos(6000);
+        leftSplit.Transparent(); mainSplitter.Transparent();
+        Add(mainSplitter.HSizePos(DPI(8), DPI(8)).VSizePos(DPI(210), DPI(8)));
 
-    exitBtn.SetLabel("Exit");
-    exitBtn.WhenAction = [=]{ this->Close(); };
-    Add(exitBtn.RightPos(DPI(8), DPI(100)).TopPos(DPI(16), DPI(28)));
-
-    // --- Category bar (TitleDragButton tiles, draggable, pastel bg) ---
-    categoryCard
-        .SetCardColors(Color(245,245,245), SColorShadow())
-        .EnableCardFrame(false)
-        .EnableCardFill(false)
-        .EnableContentClampToPane(true)   // fixed band height
-        .EnableContentScroll(true)
-        .ContentWrap()
-        .SetContentInset(DPI(4), DPI(4), DPI(4), DPI(4))
-        .SetContentGap(DPI(6), DPI(6))
-        .WrapItemSize(DPI(130), DPI(20)); // uniform category tile size
-    Add(categoryCard.HSizePos(DPI(8), DPI(8)).TopPos(DPI(72), DPI(100)));
-
-    // Add category tiles (TitleDragButton), draggable + clickable
-    for (int i = 0; i < allCategories.GetCount(); ++i) {
-        const auto& cat = allCategories[i];
-        TitleDragButton& b = categoryButtons.Create();
-        b.SetCategory(cat)                      // pastel face from cat.col (with darker mix in SetCategory)
-         .SetMode(TitleDragButton::SOURCE)
-         .SetTileSize(Size(DPI(160), DPI(30)))  // changeable via our chainable setter
-         .SetRadius(DPI(10))                     // slightly rounded
-         .SetLineThickness(0)                   // no line for category chips
-         .EnableDashedFrame(false)
-         .EnableFill(true)
-         .SetHoverTintPct(22)                   // gentle hover
-         .SetActiveColors(Color(22, 86, 160),   // dark blue when selected
-                          SColorShadow(),
-                          SColorHighlightText());
-        b.WhenAction = THISBACK1(FilterCategory, cat.key); // click == filter
-        categoryCard.AddContent(b);
+        // Initial
+        if(!activeCategoryKey.IsEmpty()) FilterCategory(activeCategoryKey);
+        UpdateCodeOutput();
+        ApplyStyleId(theme_id);
     }
 
-    // --- Left items card (wrap grid of draggable tiles) ---
-    itemsCard
-        .SetTitle("Items")
-        .SetHeaderAlign(StageCard::LEFT)
-        .EnableCardFill(true)
-        .EnableCardFrame(true)
-        .SetCardCornerRadius(DPI(10))
-        .SetCardStrokeThickness(1)
-        .SetCardColors(Color(245,245,245), SColorShadow())
-        .EnableContentScroll(true)
-        .EnableContentClampToPane(true)
-        .ContentWrap()
-        .SetContentInset(DPI(6), DPI(6), DPI(6), DPI(6))
-        .SetContentGap(DPI(6), DPI(6))
-        .WrapItemSize(DPI(60), DPI(60));
+    void Paint(Draw& w) override { w.DrawRect(GetSize(), appBg); }
 
-    // --- Selection bin (drop area) ---
-    binCard
-        .SetTileSize(DPI(60), DPI(60))
-        .SetTileGap(DPI(4))
-        .EnableCardFrame(false)
-        .EnableCardFill(false);
-    binCard.WhenListChanged = THISBACK(UpdateCodeOutput);
+    void ApplyStyleId(int id)
+    {
+        theme_id = id;
+        const int theme_count = (int)(sizeof(THEMES)/sizeof(THEMES[0]));
+        const AppTheme& T = THEMES[clamp(theme_id,0,theme_count-1)];
+        appBg = T.window_bg;
 
-    // --- Right code card (rounded dark content with green code) ---
-    // Hack: using the StageCard content frame to draw the rounded dark panel,
-    // and put DocEdit inside with transparent background and custom inks.
-	codeCard
-	    .SetTitle("U++ Code Output")
-	    .SetHeaderAlign(StageCard::LEFT)
-	    .EnableCardFill(false)
-	    .EnableCardFrame(false)
-	    .SetCardColors(Color(245,245,245), SColorShadow())
-	    .EnableContentFill(true)
-	    .EnableContentFrame(true)
-	    .SetContentCornerRadius(DPI(10))  //rounded
-	    .SetContentStrokeThickness(0)
-	    .SetContentFrameColors(Color(32,36,42), Color(0,0,0))
-	    .SetContentInset(DPI(12), DPI(12), DPI(12), DPI(12))
-	    .EnableContentScroll(false)      // card itself won’t scroll
-	    .ContentAbsolute()
-	    .EnableContentAutoFill(true);    // smart autofill
-	
-	codeOutput.SetReadOnly();
-	codeOutput.Transparent();
-	codeOutput.SetFrame(NullFrame());
-	codeOutput.SetFont(Monospace(10));
-	codeOutput.SetColor(DocEdit::INK_NORMAL,   Color(170,255,170));
-	codeOutput.SetColor(DocEdit::PAPER_NORMAL,   Color(Null));
-    codeOutput.SetColor(DocEdit::PAPER_READONLY, Color(Null));
-    codeOutput.SetColor(DocEdit::PAPER_SELECTED, Blend(Color(32,36,42), SColorHighlight(), 50));
+        StageCard::Style s = T.make_style();
 
-	codeCard.ReplaceContent(codeOutput);
+        // header
+        headerCard.SetStyleOwned(s)
+                  .EnableHeaderFill(false).EnableCardFill(false).EnableCardFrame(false)
+                  .SetTitleFont(StdFont().Bold().Height(DPI(25)))
+                  .SetHeaderGap(DPI(6)).SetHeaderInset(0, DPI(8), 0, 0);
 
-    
-    codeOutput.HSizePos(0, 0).VSizePos(0, 0);
-    
-    // --- Splitters: items | bin  ||  code ---
-    leftSplit.Vert(itemsCard, binCard);
-    leftSplit.SetPos(7000);
+        // category strip (no backgrounds)
+        categoryCard.SetStyleOwned(s)
+                    .EnableHeaderFill(false).EnableCardFill(false).EnableCardFrame(false)
+                    .EnableContentFill(false).EnableContentFrame(false)
+                    .SetContentFrameThickness(0);
 
-    mainSplitter.Horz(leftSplit, codeCard);
-    mainSplitter.SetPos(6000);
+        // items paper
+        itemsCard.SetStyleOwned(s)
+                 .EnableHeaderFill(false).EnableCardFill(false).EnableCardFrame(false)
+                 .EnableContentFill(true).EnableContentFrame(false)
+                 .SetContentCornerRadius(DPI(10)).SetContentFrameThickness(0)
+                 .SetContentColor(T.card_content_bg);
 
-    Add(mainSplitter.HSizePos(DPI(8), DPI(8)).VSizePos(DPI(178), DPI(8)));
+        // bin paper + dashed, with stronger border color
+        {
+            StageCard::Style sb = s;
+            sb.palette.cardBorder = T.bin_stroke;
+            binCard.SetStyleOwned(sb)
+                   .EnableHeaderFill(false).EnableCardFill(false).EnableCardFrame(false)
+                   .EnableContentFill(true).EnableContentFrame(true).EnableContentDash(true)
+                   .SetContentCornerRadius(DPI(10)).SetContentFrameThickness(2);
+        }
 
-    // --- Initial content ---
-    if(!activeCategoryKey.IsEmpty())
-        FilterCategory(activeCategoryKey);
-    UpdateCodeOutput();
-}
+        // code paper
+        codeCard.SetStyleOwned(s)
+                .EnableHeaderFill(false).EnableCardFill(false).EnableCardFrame(false)
+                .EnableContentFill(true).EnableContentFrame(false)
+                .SetContentCornerRadius(DPI(10)).SetContentFrameThickness(0)
+                .SetContentColor(T.code_content_bg);
 
+        // Style header buttons
+        btnExit.SetBaseColors(ButtonFaceRed(), T.chip_border, White());
+        btnCopy.SetBaseColors(ButtonFaceBlue(), T.chip_border, White());
+
+
+        // Category chips gradient across row
+        int n = categoryButtons.GetCount();
+        for(int i=0;i<n;++i) {
+            int t = (n>1) ? i*100/(n-1) : 0;
+            Color face = BlendPct(T.chip_face_a, T.chip_face_b, t);
+            categoryButtons[i].SetBaseColors(face, T.chip_border, T.chip_ink);
+        }
+
+        // Symbol tiles
+        for(int i=0;i<symbolTiles.GetCount();++i) {
+            symbolTiles[i].SetBaseColors(T.tile_face, T.tile_border, T.tile_ink);
+            symbolTiles[i].SetFont( StdFont().Height(DPI(8)) );
+        }
+        // Style selector itself
+        if(theme_id == 1) { // Midnight
+            styleDrop.SetBgColor(Gray()).SetTextColor(Black());
+        } else {            // Light
+            styleDrop.SetBgColor(Color(36,99,235)).SetTextColor(White());
+        }
+
+        Layout(); Refresh();
+    }
+
+    void FilterCategory(const String& key) {
+        activeCategoryKey = key;
+        for (int i=0;i<categoryButtons.GetCount();++i)
+            categoryButtons[i].SetSelected(allCategories[i].key == key);
+        for (const auto& cat : allCategories)
+            if(cat.key == key) { itemsCard.SetTitle(cat.name); break; }
+        UpdateSymbolGrid();
+    }
+
+    void UpdateSymbolGrid() {
+        for (int i = 0; i < symbolTiles.GetCount(); ++i) symbolTiles[i].Remove();
+        symbolTiles.Clear();
+
+        const SymbolCategory* activeCat = nullptr;
+        for (const auto& cat : allCategories) if(cat.key == activeCategoryKey) { activeCat = &cat; break; }
+        if(!activeCat) return;
+
+        for (int i = 0; i < activeCat->symbols.GetCount(); ++i) {
+            const auto& item = activeCat->symbols[i];
+            DragBadgeButton& tile = symbolTiles.Create();
+            SetupSymbolTile(tile, item).SetMode(DragBadgeButton::DRAGABLE);
+            itemsCard.AddFixed(tile, tileSizes.cx, tileSizes.cy);
+        }
+        itemsCard.Layout();
+        ApplyStyleId(theme_id); // restyle new tiles
+    }
+
+    void UpdateCodeOutput() {
+        String out; out << "// Picker Selections v1.0\n\n";
+        const Vector<SymbolItem>& selected = binCard.GetSymbols();
+
+        if (selected.IsEmpty()) {
+            out << "// Drag a symbol or a whole category into the Selection Bin...\n";
+            codeOutput.Set(out.ToWString());
+            return;
+        }
+
+        VectorMap<String, Vector<SymbolItem>> grouped;
+        for (const auto& item : selected) {
+            String fullCategory;
+            for (const auto& cat : allCategories)
+                if (cat.key == item.categoryKey) { fullCategory = cat.name; break; }
+            grouped.GetAdd(fullCategory).Add(item);
+        }
+
+        Vector<String> keys;
+        for(int i = 0; i < grouped.GetCount(); i++) keys.Add(grouped.GetKey(i));
+        Sort(keys);
+
+        const bool useHex = (bool)hexMode;
+
+        for(const String& catName : keys) {
+            out << "// " << catName << "\n";
+            for (const auto& item : grouped.Get(catName)) {
+                if(useHex) {
+                    WString ws = ToUnicode(item.charCode, CHARSET_UTF8);
+                    dword cp = ws.IsEmpty() ? 0u : (dword)ws[0];
+                    out << Format("myControl.SetLabel(FromUtf32(0x%X)); // %s\n", (int)cp, ~item.name);
+                } else {
+                    out << Format("myControl.SetLabel(\"%s\"); // %s\n", ~item.charCode, ~item.name);
+                }
+            }
+            out << "\n";
+        }
+        codeOutput.Set(out.ToWString());
+    }
+
+    void CopyToClipboard() { WriteClipboardText(codeOutput.Get()); }
+};
 
 GUI_APP_MAIN
 {
